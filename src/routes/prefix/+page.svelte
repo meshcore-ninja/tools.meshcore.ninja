@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { browser } from '$app/environment';
   import { Fingerprint, LocateFixed, Loader2, TriangleAlert, Search, Sparkles } from '@lucide/svelte';
   import { networks, prefixes, search } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
@@ -14,8 +15,13 @@
   // for a new node. The API groups every matching node server-side (uncapped),
   // so occupancy is complete at 1, 2 or 3 bytes of prefix.
 
+  const GLOBAL_NETWORK = 'global';
+  const NODES_BASE = 'https://nodes.meshcore.ninja';
+  const RESERVED_PREFIX_MESSAGE =
+    'Prefixes beginning with 00 or FF are reserved by MeshCore. Choose a prefix whose first byte is between 01 and FE.';
+
   let netList = $state([]);
-  let net = $state('');
+  let net = $state(GLOBAL_NETWORK);
   let netLoadError = $state(false);
 
   // Optional geo scope: only count nodes within `radiusKm` of (lat, lon).
@@ -37,11 +43,31 @@
   let error = $state('');
   let data = $state(null); // API /api/prefixes response
 
+  if (browser) {
+    const params = new URLSearchParams(location.search);
+    const urlNet = params.get('net');
+    const urlBytes = params.get('bytes');
+    const urlArea = params.get('area') === '1';
+    const urlLat = params.get('lat');
+    const urlLon = params.get('lon');
+    const urlRadius = Number(params.get('radius'));
+    const urlCandidate = params.get('prefix');
+    const urlPubkey = params.get('pubkey');
+
+    if (urlNet) net = urlNet;
+    if (['1', '2', '3'].includes(urlBytes)) prefixBytes = urlBytes;
+    if (urlArea) useLocation = true;
+    if (urlLat != null) lat = urlLat;
+    if (urlLon != null) lon = urlLon;
+    if (Number.isFinite(urlRadius) && urlRadius >= 1 && urlRadius <= 200) radiusKm = urlRadius;
+    if (urlCandidate != null) candidate = urlCandidate;
+    if (urlPubkey != null) candidatePubkey = urlPubkey;
+  }
+
   onMount(async () => {
     try {
       netList = await networks();
       if (!netList.length) netLoadError = true;
-      else net = netList[0].id;
     } catch {
       netLoadError = true;
     }
@@ -100,6 +126,26 @@
     }
   });
 
+  $effect(() => {
+    if (!browser) return;
+    const params = new URLSearchParams();
+    if (net && net !== GLOBAL_NETWORK) params.set('net', net);
+    if (prefixBytes !== '1') params.set('bytes', prefixBytes);
+    if (useLocation) {
+      params.set('area', '1');
+      if (lat !== '') params.set('lat', lat);
+      if (lon !== '') params.set('lon', lon);
+      if (radiusKm !== 25) params.set('radius', String(radiusKm));
+    }
+    if (candidate !== '') params.set('prefix', candidate);
+    if (candidatePubkey !== '') params.set('pubkey', candidatePubkey);
+    const query = params.toString();
+    const next = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+    if (next !== `${location.pathname}${location.search}${location.hash}`) {
+      history.replaceState(history.state, '', next);
+    }
+  });
+
   // Occupancy analysis, derived from the server response. Guard on the response's
   // own `bytes` matching the selected width so a stale result from the previous
   // width is never rendered against the wrong-sized grid.
@@ -116,8 +162,12 @@
       counts = new Array(256).fill(0);
       for (const p of data.prefixes ?? []) counts[parseInt(p.prefix, 16)] = p.count;
     }
-    let maxCount = 0;
-    for (const p of data.prefixes ?? []) if (p.count > maxCount) maxCount = p.count;
+    const occupiedCounts = (data.prefixes ?? []).map((p) => p.count).filter((c) => c > 0).sort((a, b) => a - b);
+    const heatMin = occupiedCounts[0] ?? 1;
+    const p95Count =
+      occupiedCounts[Math.min(occupiedCounts.length - 1, Math.floor(occupiedCounts.length * 0.95))] ?? heatMin;
+    const heatMax =
+      p95Count > heatMin ? p95Count : occupiedCounts[occupiedCounts.length - 1] ?? heatMin;
 
     // Suggestions: for 1 byte, the least-crowded of all 256 (free first). For
     // wider prefixes the space is huge, so offer random free prefixes.
@@ -125,6 +175,7 @@
     if (hexLen === 2) {
       suggestions = counts
         .map((c, i) => ({ prefix: i.toString(16).padStart(2, '0'), count: c }))
+        .filter((s) => !isReservedMeshCorePrefix(s.prefix))
         .sort((a, b) => a.count - b.count || parseInt(a.prefix, 16) - parseInt(b.prefix, 16))
         .slice(0, 12);
     } else {
@@ -133,7 +184,7 @@
       while (suggestions.length < 12 && attempts < 500) {
         attempts++;
         const p = randHex(hexLen);
-        if (countMap.has(p) || seen.has(p)) continue;
+        if (isReservedMeshCorePrefix(p) || countMap.has(p) || seen.has(p)) continue;
         seen.add(p);
         suggestions.push({ prefix: p, count: 0 });
       }
@@ -141,11 +192,10 @@
 
     // Used prefixes, most-crowded first (the API already sorts this way).
     const used = (data.prefixes ?? []).map((p) => ({ prefix: p.prefix, count: p.count }));
-
     return {
       countMap,
       counts,
-      maxCount,
+      heatDomain: { min: heatMin, high: heatMax },
       totalSpace: data.space,
       usedCount: data.used,
       collisions: data.collisions,
@@ -164,13 +214,24 @@
 
   const hex2 = (i) => i.toString(16).padStart(2, '0');
 
+  function isReservedMeshCorePrefix(prefix) {
+    const normalized = prefix.trim().toLowerCase();
+    if (!/^[0-9a-f]+$/.test(normalized)) return false;
+    if (normalized.length < 2) return false;
+    return normalized.startsWith('00') || normalized.startsWith('ff');
+  }
+
   // Crowdedness scale: only a free prefix is "safe", so it stays neutral. Any
   // prefix already in use starts at amber (one node is already a potential
   // collision) and deepens to red as more nodes pile onto it.
-  function cellStyle(count, maxCount, isCandidate) {
+  function cellStyle(count, heatDomain, isCandidate, isReserved) {
     if (isCandidate) return 'background:var(--color-accent2);color:#fff;';
+    if (isReserved) return 'background:repeating-linear-gradient(135deg, #1f2937 0 5px, #111827 5px 10px);color:#9ca3af;';
     if (!count) return '';
-    const t = maxCount > 1 ? (count - 1) / (maxCount - 1) : 0;
+    const t =
+      heatDomain.high > heatDomain.min
+        ? (Math.min(count, heatDomain.high) - heatDomain.min) / (heatDomain.high - heatDomain.min)
+        : 0;
     const hue = 48 - 48 * t; // 48 = amber, 0 = red
     return `background:hsl(${hue} 65% 45%);color:#fff;`;
   }
@@ -184,21 +245,33 @@
   const candidateCount = $derived(
     analysis && candidateNorm.length === hexLen ? analysis.countMap.get(candidateNorm) ?? 0 : 0
   );
+  const candidateReserved = $derived(
+    candidateNorm.length === hexLen && isReservedMeshCorePrefix(candidateNorm)
+  );
+  const selectedNetworkLabel = $derived(
+    net === GLOBAL_NETWORK ? 'Global' : netList.find((n) => n.id === net)?.name || 'this network'
+  );
+  const scopeLabel = $derived(net === GLOBAL_NETWORK ? 'globally' : 'on this network');
+  const networkItems = $derived([
+    { value: GLOBAL_NETWORK, label: 'Global' },
+    ...netList.map((n) => ({ value: n.id, label: n.name }))
+  ]);
+  const showAllHref = $derived(`${NODES_BASE}/?q=${encodeURIComponent(`^${candidateNorm}`)}`);
 
   // Node names for the inspected prefix are fetched on demand (the histogram is
-  // counts-only), via a caret pubkey-prefix search scoped to the network.
+  // counts-only), via a caret pubkey-prefix search scoped to the selected scope.
   let conflicts = $state([]);
   let conflictsLoading = $state(false);
   $effect(() => {
     const pfx = candidateNorm;
-    if (!net || pfx.length !== hexLen || candidateCount === 0) {
+    if (!net || pfx.length !== hexLen || candidateReserved || candidateCount === 0) {
       conflicts = [];
       conflictsLoading = false;
       return;
     }
     conflictsLoading = true;
     let stale = false;
-    search({ net, q: `^${pfx}`, limit: 200 })
+    search({ net: net === GLOBAL_NETWORK ? undefined : net, q: `^${pfx}`, limit: 10 })
       .then((d) => {
         if (stale) return;
         conflicts = (d.results ?? []).map((n) => ({
@@ -239,7 +312,7 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-tight text-ink">Prefix Finder</h1>
       <p class="mt-1 text-sm text-dim">
-        MeshCore routes on the first byte of a node’s public key. Pick a network (and optionally a
+        MeshCore routes on the first byte of a node’s public key. Pick Global or a network (and optionally a
         location), choose how wide a prefix to examine, then see which prefixes are taken, spot
         conflicts, and choose an uncrowded one for a new node.
       </p>
@@ -251,12 +324,11 @@
     <div class="flex flex-wrap items-end gap-x-4 gap-y-3">
       <div class="block">
         <span class="mb-1 block text-xs font-medium text-dim">Network</span>
+        <div class="w-56">
+          <Select bind:value={net} items={networkItems} placeholder="Choose a network…" />
+        </div>
         {#if netLoadError}
-          <span class="text-sm text-bad">Couldn’t load networks.</span>
-        {:else}
-          <div class="w-56">
-            <Select bind:value={net} items={netList.map((n) => ({ value: n.id, label: n.name }))} placeholder="Choose a network…" />
-          </div>
+          <span class="mt-1 block text-xs text-bad">Couldn’t load networks.</span>
         {/if}
       </div>
 
@@ -352,8 +424,12 @@
             <div class="flex items-center gap-2 text-[10px] text-muted">
               <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
               <span class="inline-flex items-center gap-1">
+                <span class="h-2.5 w-2.5 rounded-sm" style="background:repeating-linear-gradient(135deg, #1f2937 0 3px, #111827 3px 6px);"></span>
+                reserved
+              </span>
+              <span class="inline-flex items-center gap-1">
                 <span class="h-2.5 w-16 rounded-sm" style="background:linear-gradient(90deg, hsl(48 65% 45%), hsl(0 65% 45%));"></span>
-                1 → more
+                least → most
               </span>
             </div>
           </div>
@@ -362,8 +438,10 @@
               <button
                 type="button"
                 onclick={() => (candidate = hex2(i))}
-                title={`${hex2(i)} — ${count} node${count === 1 ? '' : 's'}`}
-                style={cellStyle(count, analysis.maxCount, i === candidateIdx)}
+                title={isReservedMeshCorePrefix(hex2(i))
+                  ? `${hex2(i)} — reserved by MeshCore`
+                  : `${hex2(i)} — ${count} node${count === 1 ? '' : 's'}`}
+                style={cellStyle(count, analysis.heatDomain, i === candidateIdx, isReservedMeshCorePrefix(hex2(i)))}
                 class="flex aspect-square items-center justify-center rounded-sm font-mono text-[9px] leading-none {count
                   ? ''
                   : 'bg-elev2 text-muted'} {i === candidateIdx ? 'ring-2 ring-accent2' : ''}"
@@ -373,7 +451,7 @@
             {/each}
           </div>
           <p class="mt-3 text-xs text-muted">
-            Each cell is a prefix (00–ff); colour shows how crowded it is. Click one to inspect it.
+            Each cell is a prefix (00–ff); colour shows how crowded it is. Prefixes 00 and ff are reserved.
           </p>
         {:else}
           <!-- Canvas heatmap of the whole space (too large for DOM cells) -->
@@ -383,7 +461,7 @@
               <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
               <span class="inline-flex items-center gap-1">
                 <span class="h-2.5 w-16 rounded-sm" style="background:linear-gradient(90deg, hsl(48 65% 50%), hsl(0 65% 50%));"></span>
-                1 → more
+                least → most
               </span>
             </div>
           </div>
@@ -393,34 +471,13 @@
             <PrefixCanvas
               prefixes={analysis.used}
               bytes={Number(prefixBytes)}
-              maxCount={analysis.maxCount}
               selected={candidateNorm}
               onpick={(p) => (candidate = p)}
             />
             <p class="mt-3 text-xs text-muted">
               Every prefix in the {analysis.totalSpace.toLocaleString()}-cell space; occupied ones are coloured by
-              crowdedness. Hover to read a prefix, click to inspect it.
+              crowdedness. Hover to read a prefix, scroll to zoom, drag to pan, click to inspect it.
             </p>
-
-            {#if analysis.used.some((u) => u.count > 1)}
-              <div class="mt-4 border-t border-edge pt-3">
-                <div class="mb-2 text-xs font-semibold text-bad">
-                  Collisions — prefixes shared by more than one node
-                </div>
-                <div class="grid gap-1.5 sm:grid-cols-2">
-                  {#each analysis.used.filter((u) => u.count > 1) as u (u.prefix)}
-                    <button
-                      type="button"
-                      onclick={() => (candidate = u.prefix)}
-                      class="flex items-center justify-between gap-2 rounded-md border border-bad/40 bg-bad/10 px-2.5 py-1.5 text-left hover:border-accent"
-                    >
-                      <span class="truncate font-mono text-xs text-bad">{u.prefix}</span>
-                      <span class="shrink-0 text-[11px] text-muted">{u.count} nodes</span>
-                    </button>
-                  {/each}
-                </div>
-              </div>
-            {/if}
           {/if}
         {/if}
       </div>
@@ -471,14 +528,18 @@
 
           {#if candidateNorm.length === hexLen}
             <div class="mt-3 border-t border-edge pt-3">
-              {#if candidateCount === 0}
+              {#if candidateReserved}
+                <p class="text-sm text-bad">
+                  {RESERVED_PREFIX_MESSAGE}
+                </p>
+              {:else if candidateCount === 0}
                 <p class="text-sm text-ok">
-                  Prefix <span class="font-mono font-semibold">{candidateNorm}</span> is free on this network. 🎉
+                  Prefix <span class="font-mono font-semibold">{candidateNorm}</span> is free {scopeLabel}.
                 </p>
               {:else}
                 <p class="text-sm text-bad">
                   <span class="font-mono font-semibold">{candidateNorm}</span> is used by
-                  {candidateCount} node{candidateCount === 1 ? '' : 's'}:
+                  {candidateCount} node{candidateCount === 1 ? '' : 's'} {scopeLabel}:
                 </p>
                 {#if conflictsLoading && conflicts.length === 0}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-muted">
@@ -487,12 +548,27 @@
                 {:else}
                   <ul class="mt-2 space-y-1">
                     {#each conflicts as c (c.pubkey)}
-                      <li class="flex items-center justify-between gap-2 rounded border border-edge bg-bg px-2 py-1 text-xs">
+                      <li>
+                        <a
+                          href={`${NODES_BASE}/${c.pubkey}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          class="flex items-center justify-between gap-2 rounded border border-edge bg-bg px-2 py-1 text-xs hover:border-accent"
+                        >
                         <span class="truncate text-ink">{c.name}</span>
                         <span class="shrink-0 font-mono text-muted">{c.pubkey.slice(0, Math.max(8, hexLen))}…</span>
+                        </a>
                       </li>
                     {/each}
                   </ul>
+                  <a
+                    href={showAllHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="mt-2 inline-flex text-xs font-medium text-accent hover:underline"
+                  >
+                    Show all
+                  </a>
                 {/if}
               {/if}
             </div>
@@ -502,7 +578,7 @@
     </div>
   {:else if loading}
     <div class="flex items-center justify-center gap-2 py-20 text-sm text-dim">
-      <Loader2 size={18} class="animate-spin" /> Scanning network…
+      <Loader2 size={18} class="animate-spin" /> Scanning {selectedNetworkLabel}…
     </div>
   {/if}
 </section>

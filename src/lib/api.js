@@ -45,7 +45,7 @@ export function search({ q, net, filters, limit } = {}, signal) {
  * `search`, this is not capped — the API groups every matching node server-side,
  * so the Prefix Finder sees complete occupancy and every conflict.
  * @param {object} p
- * @param {string} p.net network id (required)
+ * @param {string} [p.net] network id; omit or pass "global" for all nodes
  * @param {number} [p.bytes] prefix width in bytes (1–3, default 1)
  * @param {{key:string,value:string,radiusKm?:number}[]} [p.filters] e.g. a `near` area filter
  * @param {AbortSignal} [signal]
@@ -54,7 +54,7 @@ export function search({ q, net, filters, limit } = {}, signal) {
  */
 export function prefixes({ net, bytes = 1, filters } = {}, signal) {
   const sp = new URLSearchParams();
-  sp.set('networks', net);
+  if (net && net !== 'global') sp.set('networks', net);
   sp.set('bytes', String(bytes));
   for (const f of filters ?? []) {
     if (!f?.key || f.value == null || f.value === '') continue;

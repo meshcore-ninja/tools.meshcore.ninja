@@ -1,4 +1,5 @@
 <script>
+  import { browser } from '$app/environment';
   import jsQR from 'jsqr';
   import {
     QrCode as QrIcon,
@@ -51,6 +52,25 @@
   let testInput = $state('');
   const decoded = $derived(parseMeshUri(testInput));
   let decodeNote = $state(''); // e.g. "Decoded from image" / scan errors
+
+  if (browser) {
+    const params = new URLSearchParams(location.search);
+    const urlMode = params.get('mode');
+    const urlKind = params.get('kind');
+    const urlType = Number(params.get('type'));
+    if (['create', 'test'].includes(urlMode)) mode = urlMode;
+    if (['contact', 'channel'].includes(urlKind)) kind = urlKind;
+    contact = {
+      name: params.get('name') ?? '',
+      public_key: params.get('key') ?? '',
+      type: CONTACT_TYPES.some((t) => t.value === urlType) ? urlType : 1
+    };
+    channel = {
+      name: params.get('channel') ?? 'Public',
+      secret: params.get('secret') ?? PUBLIC_SECRET
+    };
+    testInput = params.get('uri') ?? '';
+  }
 
   let fileInput;
   function onFile(e) {
@@ -141,6 +161,30 @@
 
   const inputClass =
     'w-full rounded-md border border-edge bg-bg px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none';
+
+  $effect(() => {
+    if (!browser) return;
+    const params = new URLSearchParams();
+    if (mode !== 'create') params.set('mode', mode);
+    if (mode === 'create') {
+      if (kind !== 'contact') params.set('kind', kind);
+      if (kind === 'contact') {
+        if (contact.name) params.set('name', contact.name);
+        if (contact.public_key) params.set('key', contact.public_key);
+        if (Number(contact.type) !== 1) params.set('type', String(contact.type));
+      } else {
+        if (channel.name !== 'Public') params.set('channel', channel.name);
+        if (channel.secret !== PUBLIC_SECRET) params.set('secret', channel.secret);
+      }
+    } else if (testInput) {
+      params.set('uri', testInput);
+    }
+    const query = params.toString();
+    const next = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+    if (next !== `${location.pathname}${location.search}${location.hash}`) {
+      history.replaceState(history.state, '', next);
+    }
+  });
 </script>
 
 <svelte:head>

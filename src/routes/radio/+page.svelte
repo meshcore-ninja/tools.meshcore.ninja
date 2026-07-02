@@ -1,4 +1,5 @@
 <script>
+  import { browser } from '$app/environment';
   import { RadioTower, ArrowRightLeft, Package, Network } from '@lucide/svelte';
   import { meshNetworks } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
@@ -28,6 +29,33 @@
       preamble: 8,
       packetHex: '',
       ...over
+    };
+  }
+
+  function numberParam(params, key, fallback, { min = -Infinity, max = Infinity, allowed } = {}) {
+    const raw = params.get(key);
+    if (raw == null || raw === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < min || n > max) return fallback;
+    if (allowed && !allowed.includes(n)) return fallback;
+    return n;
+  }
+
+  function stringParam(params, key, fallback, allowed) {
+    const raw = params.get(key);
+    if (raw == null) return fallback;
+    if (allowed && !allowed.includes(raw)) return fallback;
+    return raw;
+  }
+
+  function configFromParams(params, prefix, fallback) {
+    return {
+      bwKhz: numberParam(params, `${prefix}bw`, fallback.bwKhz, { allowed: BW_OPTIONS }),
+      sf: numberParam(params, `${prefix}sf`, fallback.sf, { allowed: SF_OPTIONS }),
+      cr: stringParam(params, `${prefix}cr`, fallback.cr, CR_OPTIONS),
+      payload: numberParam(params, `${prefix}pl`, fallback.payload, { min: 1, max: 255 }),
+      preamble: fallback.preamble,
+      packetHex: stringParam(params, `${prefix}hex`, fallback.packetHex)
     };
   }
 
@@ -149,6 +177,49 @@
 
   const inputClass =
     'w-full rounded-md border border-edge bg-bg px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none';
+
+  if (browser) {
+    const params = new URLSearchParams(location.search);
+    mode = stringParam(params, 'mode', 'packet', ['packet', 'spread']);
+    compare = params.get('compare') === '1';
+    a = configFromParams(params, 'a_', defaultConfig());
+    b = configFromParams(params, 'b_', defaultConfig({ sf: 9, payload: 32 }));
+    nodes = numberParam(params, 'nodes', 700, { min: 1, max: 10000 });
+    const interval = numberParam(params, 'interval', 43200, {
+      allowed: INTERVALS.map((x) => x.s)
+    });
+    intervalIdx = Math.max(0, INTERVALS.findIndex((x) => x.s === interval));
+  }
+
+  function setIfNotDefault(params, key, value, fallback) {
+    if (String(value) !== String(fallback)) params.set(key, String(value));
+  }
+
+  function writeConfigParams(params, prefix, cfg, fallback) {
+    setIfNotDefault(params, `${prefix}bw`, cfg.bwKhz, fallback.bwKhz);
+    setIfNotDefault(params, `${prefix}sf`, cfg.sf, fallback.sf);
+    setIfNotDefault(params, `${prefix}cr`, cfg.cr, fallback.cr);
+    setIfNotDefault(params, `${prefix}pl`, cfg.payload, fallback.payload);
+    if (cfg.packetHex) params.set(`${prefix}hex`, cfg.packetHex);
+  }
+
+  $effect(() => {
+    if (!browser) return;
+    const params = new URLSearchParams();
+    if (mode !== 'packet') params.set('mode', mode);
+    if (compare) params.set('compare', '1');
+    writeConfigParams(params, 'a_', a, defaultConfig());
+    if (compare) writeConfigParams(params, 'b_', b, defaultConfig({ sf: 9, payload: 32 }));
+    if (mode === 'spread') {
+      if (nodes !== 700) params.set('nodes', String(nodes));
+      if (intervalSec !== 43200) params.set('interval', String(intervalSec));
+    }
+    const query = params.toString();
+    const next = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+    if (next !== `${location.pathname}${location.search}${location.hash}`) {
+      history.replaceState(history.state, '', next);
+    }
+  });
 
   function dutyClass(d) {
     if (d >= 0.1) return 'text-bad';
