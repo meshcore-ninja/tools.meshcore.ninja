@@ -1,5 +1,5 @@
 <script>
-  import { Minus, Plus, RotateCcw } from '@lucide/svelte';
+  import { Download, GripHorizontal, Minus, Plus, RotateCcw } from '@lucide/svelte';
 
   // A compact canvas heatmap of the whole prefix space, for widths too large to
   // render as DOM cells (2 bytes = 65 536 prefixes, 3 bytes = 16.7 M). Each
@@ -26,12 +26,18 @@
   });
 
   let canvas;
+  let frame;
+  let controls;
   let hover = $state(null); // { prefix, count, x, y }
   let zoom = $state(1);
   let centerX = $state(0.5);
   let centerY = $state(0.5);
   let dragging = $state(null);
   let didDrag = $state(false);
+  let controlDrag = $state(null);
+  let controlsMoved = $state(false);
+  let controlsX = $state(8);
+  let controlsY = $state(8);
 
   function fillFor(count) {
     const { min, high } = heatDomain;
@@ -61,21 +67,23 @@
     canvas.width = R * dpr;
     canvas.height = R * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, R, R);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, R, R);
 
     const { scale, originX, originY } = viewport();
     const cell = scale / dim;
-    const s = Math.max(1, cell); // never smaller than a pixel, so dots stay visible
     for (const p of prefixes) {
       const idx = parseInt(p.prefix, 16);
       if (Number.isNaN(idx)) continue;
       const col = idx % dim;
       const row = Math.floor(idx / dim);
-      const x = originX + col * cell;
-      const y = originY + row * cell;
-      if (x > R || y > R || x + s < 0 || y + s < 0) continue;
+      const x0 = Math.round(originX + col * cell);
+      const y0 = Math.round(originY + row * cell);
+      const x1 = Math.round(originX + (col + 1) * cell);
+      const y1 = Math.round(originY + (row + 1) * cell);
+      if (x0 > R || y0 > R || x1 < 0 || y1 < 0) continue;
       ctx.fillStyle = fillFor(p.count);
-      ctx.fillRect(Math.floor(x), Math.floor(y), s, s);
+      ctx.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
     }
 
     function strokePrefix(prefix, color, minBox, width) {
@@ -161,6 +169,14 @@
     centerY = 0.5;
   }
 
+  function downloadImage() {
+    if (!canvas) return;
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = `meshcore-prefix-map-${bytes}-byte-${Math.round(zoom)}x.png`;
+    a.click();
+  }
+
   function onpointerdown(e) {
     canvas.setPointerCapture(e.pointerId);
     dragging = { id: e.pointerId, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
@@ -184,10 +200,69 @@
   function onpointerup(e) {
     if (dragging?.id === e.pointerId) dragging = null;
   }
+
+  function clampControls(x, y) {
+    const frameRect = frame?.getBoundingClientRect();
+    const controlsRect = controls?.getBoundingClientRect();
+    if (!frameRect || !controlsRect) return { x, y };
+    return {
+      x: Math.min(frameRect.width - controlsRect.width - 8, Math.max(8, x)),
+      y: Math.min(frameRect.height - controlsRect.height - 8, Math.max(8, y))
+    };
+  }
+
+  function onControlDragStart(e) {
+    const frameRect = frame.getBoundingClientRect();
+    const controlsRect = controls.getBoundingClientRect();
+    controlsMoved = true;
+    controlsX = controlsRect.left - frameRect.left;
+    controlsY = controlsRect.top - frameRect.top;
+    controlDrag = {
+      id: e.pointerId,
+      dx: e.clientX - controlsRect.left,
+      dy: e.clientY - controlsRect.top
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onControlDragMove(e) {
+    if (!controlDrag || controlDrag.id !== e.pointerId) return;
+    const frameRect = frame.getBoundingClientRect();
+    const next = clampControls(
+      e.clientX - frameRect.left - controlDrag.dx,
+      e.clientY - frameRect.top - controlDrag.dy
+    );
+    controlsX = next.x;
+    controlsY = next.y;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onControlDragEnd(e) {
+    if (controlDrag?.id === e.pointerId) controlDrag = null;
+  }
 </script>
 
-<div class="relative">
-  <div class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-edge bg-bg/90 p-1 shadow-lg backdrop-blur">
+<div class="relative" bind:this={frame}>
+  <div
+    bind:this={controls}
+    class="absolute z-20 flex items-center gap-1 rounded-md border border-edge bg-bg/90 p-1 shadow-lg backdrop-blur"
+    style={controlsMoved ? `left:${controlsX}px;top:${controlsY}px;` : 'right:8px;top:8px;'}
+  >
+    <button
+      type="button"
+      class="grid h-7 w-7 cursor-grab place-items-center rounded text-muted hover:bg-elev hover:text-ink active:cursor-grabbing"
+      title="Drag controls"
+      aria-label="Drag controls"
+      onpointerdown={onControlDragStart}
+      onpointermove={onControlDragMove}
+      onpointerup={onControlDragEnd}
+      onpointercancel={onControlDragEnd}
+    >
+      <GripHorizontal size={14} />
+    </button>
     <button
       type="button"
       onclick={() => zoomAt(zoom / 1.8)}
@@ -218,6 +293,15 @@
     >
       <RotateCcw size={14} />
     </button>
+    <button
+      type="button"
+      onclick={downloadImage}
+      class="grid h-7 w-7 place-items-center rounded text-muted hover:bg-elev hover:text-ink"
+      title="Download PNG"
+      aria-label="Download PNG"
+    >
+      <Download size={14} />
+    </button>
   </div>
   <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
   <canvas
@@ -238,7 +322,7 @@
       hover = null;
       dragging = null;
     }}
-    class="w-full cursor-crosshair rounded-lg border border-edge bg-elev2 active:cursor-grabbing"
+    class="w-full cursor-crosshair rounded-lg border border-edge bg-black active:cursor-grabbing"
     style="aspect-ratio:1/1; image-rendering:pixelated;"
   ></canvas>
   {#if hover}
