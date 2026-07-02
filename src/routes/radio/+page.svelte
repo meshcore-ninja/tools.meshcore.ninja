@@ -1,8 +1,11 @@
 <script>
-  import { RadioTower, ArrowRightLeft } from '@lucide/svelte';
+  import { RadioTower, ArrowRightLeft, Package, Network } from '@lucide/svelte';
   import { meshNetworks } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
   import Switch from '$lib/ui/Switch.svelte';
+  import SegmentedGroup from '$lib/ui/SegmentedGroup.svelte';
+  import Slider from '$lib/ui/Slider.svelte';
+  import NumberSlider from '$lib/ui/NumberSlider.svelte';
   import { BUILTIN_PRESETS, BW_OPTIONS, SF_OPTIONS, CR_OPTIONS } from '$lib/radioPresets.js';
   import {
     timeOnAir,
@@ -18,16 +21,31 @@
   // drive time on air; frequency and TX power are informational context.
   function defaultConfig(over = {}) {
     return {
-      freqMhz: 869.525,
       bwKhz: 250,
       sf: 11,
       cr: '4/5',
       payload: 32,
       preamble: 8,
-      txPower: 22,
+      packetHex: '',
       ...over
     };
   }
+
+  // Paste a raw MeshCore packet (hex) to size the payload from it: LoRa time on
+  // air is driven by the whole PHY payload, so the byte length is what matters.
+  function sizeFromPacket(cfg) {
+    const hex = (cfg.packetHex || '').replace(/[^0-9a-fA-F]/g, '');
+    const bytes = Math.floor(hex.length / 2);
+    if (bytes >= 1 && bytes <= 255) cfg.payload = bytes;
+  }
+  function packetBytes(cfg) {
+    return Math.floor((cfg.packetHex || '').replace(/[^0-9a-fA-F]/g, '').length / 2);
+  }
+
+  // Two modes: a focused single-packet time-on-air calculator, and an optional
+  // "network spread" that scales that packet across a whole mesh.
+  let mode = $state('packet'); // 'packet' | 'spread'
+  const spread = $derived(mode === 'spread');
 
   let a = $state(defaultConfig());
   let b = $state(defaultConfig({ sf: 9, payload: 32 }));
@@ -38,12 +56,31 @@
   let presetA = $state('');
   let presetB = $state('');
 
-  // Shared network scenario: how many nodes, and how often each transmits.
+  // Shared network scenario: how many nodes, and how often each transmits. The
+  // interval is a discrete slider over human-friendly values, which spans
+  // seconds → a day far more legibly than one linear range.
   let nodes = $state(700);
-  let intervalValue = $state(12);
-  let intervalUnit = $state('hours'); // seconds | minutes | hours
-  const UNIT_SEC = { seconds: 1, minutes: 60, hours: 3600 };
-  const intervalSec = $derived(intervalValue * UNIT_SEC[intervalUnit]);
+  // Realistic MeshCore advert cadences — from a fairly chatty 30 min up to a
+  // sparse repeater advert every few days.
+  const INTERVALS = [
+    { s: 1800, label: '30 min' },
+    { s: 3600, label: '1 h' },
+    { s: 7200, label: '2 h' },
+    { s: 10800, label: '3 h' },
+    { s: 14400, label: '4 h' },
+    { s: 21600, label: '6 h' },
+    { s: 28800, label: '8 h' },
+    { s: 43200, label: '12 h' },
+    { s: 64800, label: '18 h' },
+    { s: 86400, label: '24 h' },
+    { s: 129600, label: '36 h' },
+    { s: 172800, label: '48 h' },
+    { s: 259200, label: '72 h' }
+  ];
+  let intervalIdx = $state(INTERVALS.findIndex((x) => x.s === 43200)); // 12 h default
+  const intervalSec = $derived(INTERVALS[intervalIdx].s);
+  const intervalLabel = $derived(INTERVALS[intervalIdx].label);
+  const txPerDay = $derived(intervalSec > 0 ? 86400 / intervalSec : 0);
 
   // Live network presets from the catalog (those declaring a radio config).
   let netPresets = $state([]);
@@ -74,8 +111,8 @@
     if (!id) return;
     const p = [...BUILTIN_PRESETS, ...netPresets].find((x) => x.id === id);
     if (!p) return;
-    if (target === 'a') a = { ...a, freqMhz: p.freqMhz, bwKhz: p.bwKhz, sf: p.sf, cr: p.cr };
-    else b = { ...b, freqMhz: p.freqMhz, bwKhz: p.bwKhz, sf: p.sf, cr: p.cr };
+    if (target === 'a') a = { ...a, bwKhz: p.bwKhz, sf: p.sf, cr: p.cr };
+    else b = { ...b, bwKhz: p.bwKhz, sf: p.sf, cr: p.cr };
   }
 
   // Derived per-config results. Everything downstream keys off the single ToA.
@@ -140,34 +177,45 @@
       />
     </div>
 
-    <label class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Frequency (MHz)</span>
-      <input class={inputClass} type="number" step="0.001" bind:value={cfg.freqMhz} />
-    </label>
-    <div class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Bandwidth (kHz)</span>
-      <Select bind:value={cfg.bwKhz} items={BW_OPTIONS.map((bw) => ({ value: bw, label: `${bw}` }))} />
+    <div class="col-span-2 grid grid-cols-3 gap-3">
+      <div class="block">
+        <span class="mb-1 block text-xs font-medium text-dim">Bandwidth (kHz)</span>
+        <Select bind:value={cfg.bwKhz} items={BW_OPTIONS.map((bw) => ({ value: bw, label: `${bw}` }))} />
+      </div>
+      <div class="block">
+        <span class="mb-1 block text-xs font-medium text-dim">Spreading factor</span>
+        <Select bind:value={cfg.sf} items={SF_OPTIONS.map((sf) => ({ value: sf, label: `SF${sf}` }))} />
+      </div>
+      <div class="block">
+        <span class="mb-1 block text-xs font-medium text-dim">Coding rate</span>
+        <Select bind:value={cfg.cr} items={CR_OPTIONS.map((cr) => ({ value: cr, label: cr }))} />
+      </div>
     </div>
-    <div class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Spreading factor</span>
-      <Select bind:value={cfg.sf} items={SF_OPTIONS.map((sf) => ({ value: sf, label: `SF${sf}` }))} />
-    </div>
-    <div class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Coding rate</span>
-      <Select bind:value={cfg.cr} items={CR_OPTIONS.map((cr) => ({ value: cr, label: cr }))} />
-    </div>
-    <label class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Payload (bytes)</span>
-      <input class={inputClass} type="number" min="1" max="255" bind:value={cfg.payload} />
-    </label>
-    <label class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">TX power (dBm)</span>
-      <input class={inputClass} type="number" bind:value={cfg.txPower} />
+    <NumberSlider class="col-span-2" label="Payload" bind:value={cfg.payload} min={1} max={255} suffix="bytes" />
+
+    <label class="col-span-2 block">
+      <span class="mb-1 block text-xs font-medium text-dim">
+        Or paste a packet (hex) to size the payload
+      </span>
+      <input
+        class="{inputClass} font-mono"
+        bind:value={cfg.packetHex}
+        oninput={() => sizeFromPacket(cfg)}
+        placeholder="e.g. 010a2b… — the whole PHY payload"
+        spellcheck="false"
+        autocapitalize="off"
+      />
+      {#if packetBytes(cfg) > 0}
+        <span class="mt-1 block text-[11px] text-muted">
+          {packetBytes(cfg)} bytes from packet → payload set to {Math.min(255, packetBytes(cfg))}.
+        </span>
+      {/if}
     </label>
   </div>
 {/snippet}
 
 {#snippet results(r, cfg)}
+  <!-- Packet-level metrics: always shown -->
   <div class="grid grid-cols-2 gap-3">
     <div class="rounded-lg border border-edge bg-bg p-3">
       <div class="text-[10px] uppercase tracking-wide text-muted">Time on air</div>
@@ -179,65 +227,81 @@
       <div class="mt-0.5 text-lg font-semibold text-ink">{(r.rb / 1000).toFixed(2)} kbps</div>
       <div class="text-[11px] text-muted">{cfg.payload} B payload</div>
     </div>
-    <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Packets / hour</div>
-      <div class="mt-0.5 text-lg font-semibold text-ink">{Math.round(r.load.txPerHour).toLocaleString()}</div>
-      <div class="text-[11px] text-muted">≈ one every {fmtDuration(r.load.secondsBetweenTx)}</div>
+    <div class="col-span-2 rounded-lg border border-edge bg-bg p-3">
+      <div class="text-[10px] uppercase tracking-wide text-muted">Airtime breakdown</div>
+      <div class="mt-1 flex overflow-hidden rounded" style="height: 8px;">
+        <div class="h-full bg-accent2" style="width: {(r.toa.preamble / r.toa.total) * 100}%" title="Preamble"></div>
+        <div class="h-full bg-accent" style="width: {(r.toa.payload / r.toa.total) * 100}%" title="Payload"></div>
+      </div>
+      <div class="mt-1.5 flex justify-between text-[11px] text-muted">
+        <span><span class="text-accent2">■</span> Preamble {fmtDuration(r.toa.preamble)}</span>
+        <span><span class="text-accent">■</span> Payload {fmtDuration(r.toa.payload)}</span>
+      </div>
     </div>
-    <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Channel utilisation</div>
-      <div class="mt-0.5 text-lg font-semibold {dutyClass(r.load.dutyCycle)}">{fmtPct(r.load.dutyCycle)}</div>
-      <div class="text-[11px] text-muted">{fmtDuration(r.load.airtimePerHourSec)} of airtime / hour</div>
-    </div>
-    <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Traffic / node / day</div>
-      <div class="mt-0.5 text-lg font-semibold text-ink">{fmtDuration(r.load.airtimePerNodePerDaySec)}</div>
-      <div class="text-[11px] text-muted">of airtime each</div>
-    </div>
-    <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Collision pressure</div>
-      <div class="mt-0.5 text-lg font-semibold {dutyClass(r.collision)}">{fmtPct(r.collision)}</div>
-      <div class="text-[11px] text-muted">chance a frame overlaps</div>
-    </div>
+
+    {#if spread}
+      <div class="rounded-lg border border-edge bg-bg p-3">
+        <div class="text-[10px] uppercase tracking-wide text-muted">Packets / hour</div>
+        <div class="mt-0.5 text-lg font-semibold text-ink">{Math.round(r.load.txPerHour).toLocaleString()}</div>
+        <div class="text-[11px] text-muted">≈ one every {fmtDuration(r.load.secondsBetweenTx)}</div>
+      </div>
+      <div class="rounded-lg border border-edge bg-bg p-3">
+        <div class="text-[10px] uppercase tracking-wide text-muted">Channel utilisation</div>
+        <div class="mt-0.5 text-lg font-semibold {dutyClass(r.load.dutyCycle)}">{fmtPct(r.load.dutyCycle)}</div>
+        <div class="text-[11px] text-muted">{fmtDuration(r.load.airtimePerHourSec)} of airtime / hour</div>
+      </div>
+      <div class="rounded-lg border border-edge bg-bg p-3">
+        <div class="text-[10px] uppercase tracking-wide text-muted">Traffic / node / day</div>
+        <div class="mt-0.5 text-lg font-semibold text-ink">{fmtDuration(r.load.airtimePerNodePerDaySec)}</div>
+        <div class="text-[11px] text-muted">of airtime each</div>
+      </div>
+      <div class="rounded-lg border border-edge bg-bg p-3">
+        <div class="text-[10px] uppercase tracking-wide text-muted">Collision pressure</div>
+        <div class="mt-0.5 text-lg font-semibold {dutyClass(r.collision)}">{fmtPct(r.collision)}</div>
+        <div class="text-[11px] text-muted">chance a frame overlaps</div>
+      </div>
+    {/if}
   </div>
 
-  <!-- Utilisation bar -->
-  <div class="mt-3">
-    <div class="h-2 w-full overflow-hidden rounded-full bg-edge">
-      <div
-        class="h-full rounded-full {r.load.dutyCycle >= 0.1 ? 'bg-bad' : r.load.dutyCycle >= 0.01 ? 'bg-warn' : 'bg-accent'}"
-        style="width: {Math.min(100, r.load.dutyCycle * 100).toFixed(2)}%"
-      ></div>
+  {#if spread}
+    <!-- Utilisation bar -->
+    <div class="mt-3">
+      <div class="h-2 w-full overflow-hidden rounded-full bg-edge">
+        <div
+          class="h-full rounded-full {r.load.dutyCycle >= 0.1 ? 'bg-bad' : r.load.dutyCycle >= 0.01 ? 'bg-warn' : 'bg-accent'}"
+          style="width: {Math.min(100, r.load.dutyCycle * 100).toFixed(2)}%"
+        ></div>
+      </div>
+      <div class="mt-1 flex justify-between text-[10px] text-muted">
+        <span>0%</span><span>1% EU duty limit</span><span>100%</span>
+      </div>
     </div>
-    <div class="mt-1 flex justify-between text-[10px] text-muted">
-      <span>0%</span><span>1% EU duty limit</span><span>100%</span>
-    </div>
-  </div>
 
-  <!-- Scenario sweep -->
-  <div class="mt-4 overflow-hidden rounded-lg border border-edge">
-    <div class="bg-elev2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">
-      What happens as the network grows (same {intervalValue}{intervalUnit[0]} interval)
-    </div>
-    <table class="w-full text-left text-xs">
-      <thead class="text-muted">
-        <tr class="border-b border-edge">
-          <th class="px-3 py-1.5 font-medium">Nodes</th>
-          <th class="px-3 py-1.5 text-right font-medium">Channel use</th>
-          <th class="px-3 py-1.5 text-right font-medium">Collision</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each r.sweep as s (s.nodes)}
-          <tr class="border-b border-edge/50 last:border-0">
-            <td class="px-3 py-1.5 font-mono text-ink">{s.nodes.toLocaleString()}</td>
-            <td class="px-3 py-1.5 text-right font-mono {dutyClass(s.dutyCycle)}">{fmtPct(s.dutyCycle)}</td>
-            <td class="px-3 py-1.5 text-right font-mono {dutyClass(s.collision)}">{fmtPct(s.collision)}</td>
+    <!-- Scenario sweep -->
+    <div class="mt-4 overflow-hidden rounded-lg border border-edge">
+      <div class="bg-elev2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+        What happens as the network grows (same {intervalLabel} interval)
+      </div>
+      <table class="w-full text-left text-xs">
+        <thead class="text-muted">
+          <tr class="border-b border-edge">
+            <th class="px-3 py-1.5 font-medium">Nodes</th>
+            <th class="px-3 py-1.5 text-right font-medium">Channel use</th>
+            <th class="px-3 py-1.5 text-right font-medium">Collision</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
+        </thead>
+        <tbody>
+          {#each r.sweep as s (s.nodes)}
+            <tr class="border-b border-edge/50 last:border-0">
+              <td class="px-3 py-1.5 font-mono text-ink">{s.nodes.toLocaleString()}</td>
+              <td class="px-3 py-1.5 text-right font-mono {dutyClass(s.dutyCycle)}">{fmtPct(s.dutyCycle)}</td>
+              <td class="px-3 py-1.5 text-right font-mono {dutyClass(s.collision)}">{fmtPct(s.collision)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
 {/snippet}
 
 <section class="mx-auto w-full max-w-6xl px-4 py-8">
@@ -248,39 +312,49 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-tight text-ink">Radio & Airtime Calculator</h1>
       <p class="mt-1 text-sm text-dim">
-        LoRa time on air, then scaled to a whole mesh — “700 repeaters advertising every 12 hours”
-        — with duty cycle and collision pressure. Turn on compare to weigh two radio profiles.
+        {#if spread}
+          Scale one packet across a whole mesh — “700 repeaters advertising every 12 hours” — with
+          duty cycle and collision pressure.
+        {:else}
+          LoRa time on air and bit rate for a single packet. Paste a raw packet or set the payload,
+          then turn on network spread to scale it across a mesh.
+        {/if}
       </p>
     </div>
   </header>
 
-  <!-- Network scenario -->
-  <div class="mb-6 flex flex-wrap items-end gap-4 rounded-2xl border border-edge bg-elev p-4">
-    <label class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Number of nodes</span>
-      <input class="{inputClass} w-32" type="number" min="1" bind:value={nodes} />
-    </label>
-    <div class="block">
-      <span class="mb-1 block text-xs font-medium text-dim">Each transmits every</span>
-      <div class="flex gap-2">
-        <input class="{inputClass} w-24" type="number" min="1" bind:value={intervalValue} />
-        <div class="w-28">
-          <Select
-            bind:value={intervalUnit}
-            items={[
-              { value: 'seconds', label: 'seconds' },
-              { value: 'minutes', label: 'minutes' },
-              { value: 'hours', label: 'hours' }
-            ]}
-          />
-        </div>
-      </div>
-    </div>
-    <label class="ml-auto inline-flex cursor-pointer items-center gap-2.5 pb-1.5 text-sm text-dim">
+  <!-- Mode + compare toolbar -->
+  <div class="mb-6 flex flex-wrap items-center gap-4">
+    <SegmentedGroup
+      bind:value={mode}
+      items={[
+        { value: 'packet', label: 'Single packet', icon: Package },
+        { value: 'spread', label: 'Network spread', icon: Network }
+      ]}
+    />
+    <label class="ml-auto inline-flex cursor-pointer items-center gap-2.5 text-sm text-dim">
       <Switch bind:checked={compare} />
       Compare a second config
     </label>
   </div>
+
+  {#if spread}
+    <!-- Network scenario (spread mode only) -->
+    <div class="mb-6 grid gap-5 rounded-2xl border border-edge bg-elev p-4 sm:grid-cols-2">
+      <NumberSlider label="Number of nodes" bind:value={nodes} min={1} max={10000} suffix="nodes" />
+      <div>
+        <div class="mb-1 flex items-baseline justify-between gap-2">
+          <span class="text-xs font-medium text-dim">Each transmits every</span>
+          <span class="font-mono text-xs text-ink">
+            {intervalLabel} · {Math.round(txPerDay).toLocaleString()}/day
+          </span>
+        </div>
+        <div class="flex h-8 items-center">
+          <Slider bind:value={intervalIdx} min={0} max={INTERVALS.length - 1} step={1} />
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <div class="grid gap-6 {compare ? 'lg:grid-cols-2' : ''}">
     <!-- Config A -->
@@ -316,9 +390,9 @@
         B is
         <strong class="text-ink">{(ra.toa.total / rb2.toa.total).toFixed(2)}×</strong>
         {ra.toa.total >= rb2.toa.total ? 'faster' : 'slower'} on air than A
-        ({fmtDuration(ra.toa.total)} vs {fmtDuration(rb2.toa.total)}), and uses
-        <strong class="text-ink">{fmtPct(rb2.load.dutyCycle)}</strong>
-        of the channel vs A’s <strong class="text-ink">{fmtPct(ra.load.dutyCycle)}</strong>.
+        ({fmtDuration(ra.toa.total)} vs {fmtDuration(rb2.toa.total)}){#if spread}, and uses
+          <strong class="text-ink">{fmtPct(rb2.load.dutyCycle)}</strong>
+          of the channel vs A’s <strong class="text-ink">{fmtPct(ra.load.dutyCycle)}</strong>{/if}.
       </span>
     </div>
   {/if}

@@ -1,16 +1,18 @@
 <script>
   import { onMount } from 'svelte';
   import { Fingerprint, LocateFixed, Loader2, TriangleAlert, Search, Sparkles } from '@lucide/svelte';
-  import { networks, search } from '$lib/api.js';
+  import { networks, prefixes, search } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
   import Checkbox from '$lib/ui/Checkbox.svelte';
   import Slider from '$lib/ui/Slider.svelte';
   import SegmentedGroup from '$lib/ui/SegmentedGroup.svelte';
+  import PrefixCanvas from '$lib/PrefixCanvas.svelte';
 
   // MeshCore routes on the first byte of a node's public key — the "prefix".
   // Two nodes that share a prefix on the same network create path ambiguity, so
   // this tool shows which prefixes are already taken and suggests uncrowded ones
-  // for a new node. The prefix can be examined at 1, 2 or 3 bytes.
+  // for a new node. The API groups every matching node server-side (uncapped),
+  // so occupancy is complete at 1, 2 or 3 bytes of prefix.
 
   let netList = $state([]);
   let net = $state('');
@@ -33,9 +35,7 @@
 
   let loading = $state(false);
   let error = $state('');
-  // Raw fetched nodes, kept so changing the prefix width recomputes instantly
-  // without another API round-trip.
-  let scan = $state(null); // { nodes:[{name,pubkey,type}], total, sampled, capped }
+  let data = $state(null); // API /api/prefixes response
 
   onMount(async () => {
     try {
@@ -54,6 +54,7 @@
         lat = pos.coords.latitude.toFixed(5);
         lon = pos.coords.longitude.toFixed(5);
         useLocation = true;
+        run();
       },
       () => {
         error = 'Could not get your location.';
@@ -61,68 +62,62 @@
     );
   }
 
+  let reqId = 0;
   async function run() {
     if (!net) return;
+    const id = ++reqId;
     loading = true;
     error = '';
+    // Drop the previous width's result immediately: otherwise `analysis` would
+    // briefly mix the old (e.g. 2-byte) prefixes with the new width and try to
+    // render a grid sized for the wrong space.
+    data = null;
     try {
       const filters = [];
       if (useLocation && lat !== '' && lon !== '') {
         filters.push({ key: 'near', value: `${lat},${lon}`, radiusKm: Number(radiusKm) });
       }
-      const data = await search({ net, filters, limit: 200 });
-      const nodes = (data.results ?? [])
-        .map((n) => ({
-          name: n.name || '(unnamed)',
-          pubkey: (n.pubkey || '').toLowerCase(),
-          type: n.typeName
-        }))
-        .filter((n) => n.pubkey.length >= 6);
-      scan = {
-        nodes,
-        total: data.total ?? nodes.length,
-        sampled: nodes.length,
-        capped: !!data.capped
-      };
+      const d = await prefixes({ net, bytes: Number(prefixBytes), filters });
+      if (id !== reqId) return; // a newer scan superseded this one
+      data = d;
     } catch (e) {
-      error = 'Search failed. The API may be unreachable.';
-      scan = null;
+      if (id !== reqId) return;
+      error = 'Prefix scan failed. The API may be unreachable.';
+      data = null;
     } finally {
-      loading = false;
+      if (id === reqId) loading = false;
     }
   }
 
-  // Re-run whenever the network changes (and on first network load). Prefix width
-  // and location tweaks recompute locally / on demand.
-  let lastNet = '';
+  // Re-scan whenever the network or prefix width changes (and on first load).
+  // Location/radius tweaks re-scan on the Scan button (or "use my location").
+  let lastKey = '';
   $effect(() => {
-    if (net && net !== lastNet) {
-      lastNet = net;
+    const key = `${net}|${prefixBytes}`;
+    if (net && key !== lastKey) {
+      lastKey = key;
       run();
     }
   });
 
-  // Occupancy analysis for the current prefix width, derived from the fetched
-  // nodes so it updates the instant the width changes.
+  // Occupancy analysis, derived from the server response. Guard on the response's
+  // own `bytes` matching the selected width so a stale result from the previous
+  // width is never rendered against the wrong-sized grid.
   const analysis = $derived.by(() => {
-    if (!scan) return null;
-    const byPrefix = new Map(); // prefix hex -> [{name,pubkey,type}]
-    for (const n of scan.nodes) {
-      const key = n.pubkey.slice(0, hexLen);
-      if (key.length < hexLen) continue;
-      if (!byPrefix.has(key)) byPrefix.set(key, []);
-      byPrefix.get(key).push(n);
-    }
-    const totalSpace = Math.pow(16, hexLen);
-    const usedCount = byPrefix.size;
-    const collisions = Math.max(0, scan.sampled - usedCount);
+    if (!data || data.bytes !== Number(prefixBytes)) return null;
+    // prefix hex -> count (the histogram is counts-only; node names are fetched
+    // lazily for whichever prefix the user inspects).
+    const countMap = new Map();
+    for (const p of data.prefixes ?? []) countMap.set(p.prefix, p.count);
 
     // 256-cell counts for the 1-byte grid.
     let counts = null;
     if (hexLen === 2) {
       counts = new Array(256).fill(0);
-      for (const [key, arr] of byPrefix) counts[parseInt(key, 16)] = arr.length;
+      for (const p of data.prefixes ?? []) counts[parseInt(p.prefix, 16)] = p.count;
     }
+    let maxCount = 0;
+    for (const p of data.prefixes ?? []) if (p.count > maxCount) maxCount = p.count;
 
     // Suggestions: for 1 byte, the least-crowded of all 256 (free first). For
     // wider prefixes the space is huge, so offer random free prefixes.
@@ -138,18 +133,26 @@
       while (suggestions.length < 12 && attempts < 500) {
         attempts++;
         const p = randHex(hexLen);
-        if (byPrefix.has(p) || seen.has(p)) continue;
+        if (countMap.has(p) || seen.has(p)) continue;
         seen.add(p);
         suggestions.push({ prefix: p, count: 0 });
       }
     }
 
-    // Used prefixes, most-crowded first — the conflict list for wider prefixes.
-    const used = [...byPrefix.entries()]
-      .map(([prefix, arr]) => ({ prefix, count: arr.length, nodes: arr }))
-      .sort((a, b) => b.count - a.count || a.prefix.localeCompare(b.prefix));
+    // Used prefixes, most-crowded first (the API already sorts this way).
+    const used = (data.prefixes ?? []).map((p) => ({ prefix: p.prefix, count: p.count }));
 
-    return { byPrefix, counts, totalSpace, usedCount, collisions, suggestions, used };
+    return {
+      countMap,
+      counts,
+      maxCount,
+      totalSpace: data.space,
+      usedCount: data.used,
+      collisions: data.collisions,
+      counted: data.counted,
+      suggestions,
+      used
+    };
   });
 
   function randHex(len) {
@@ -161,24 +164,58 @@
 
   const hex2 = (i) => i.toString(16).padStart(2, '0');
 
-  function cellClass(count, isCandidate) {
-    if (isCandidate) return 'bg-accent2 text-white ring-2 ring-accent2';
-    if (count === 0) return 'bg-elev2 text-muted hover:bg-edge';
-    if (count === 1) return 'bg-warn/30 text-ink';
-    if (count === 2) return 'bg-warn/60 text-ink';
-    return 'bg-bad/70 text-white';
+  // Crowdedness scale: only a free prefix is "safe", so it stays neutral. Any
+  // prefix already in use starts at amber (one node is already a potential
+  // collision) and deepens to red as more nodes pile onto it.
+  function cellStyle(count, maxCount, isCandidate) {
+    if (isCandidate) return 'background:var(--color-accent2);color:#fff;';
+    if (!count) return '';
+    const t = maxCount > 1 ? (count - 1) / (maxCount - 1) : 0;
+    const hue = 48 - 48 * t; // 48 = amber, 0 = red
+    return `background:hsl(${hue} 65% 45%);color:#fff;`;
   }
 
-  // Conflicts for the chosen candidate prefix (normalised to the active width).
   const candidateNorm = $derived(
     (candidate || '').toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, hexLen)
   );
   const candidateIdx = $derived(
     hexLen === 2 && candidateNorm.length === 2 ? parseInt(candidateNorm, 16) : -1
   );
-  const conflicts = $derived(
-    analysis && candidateNorm.length === hexLen ? analysis.byPrefix.get(candidateNorm) ?? [] : []
+  const candidateCount = $derived(
+    analysis && candidateNorm.length === hexLen ? analysis.countMap.get(candidateNorm) ?? 0 : 0
   );
+
+  // Node names for the inspected prefix are fetched on demand (the histogram is
+  // counts-only), via a caret pubkey-prefix search scoped to the network.
+  let conflicts = $state([]);
+  let conflictsLoading = $state(false);
+  $effect(() => {
+    const pfx = candidateNorm;
+    if (!net || pfx.length !== hexLen || candidateCount === 0) {
+      conflicts = [];
+      conflictsLoading = false;
+      return;
+    }
+    conflictsLoading = true;
+    let stale = false;
+    search({ net, q: `^${pfx}`, limit: 200 })
+      .then((d) => {
+        if (stale) return;
+        conflicts = (d.results ?? []).map((n) => ({
+          pubkey: (n.pubkey || '').toLowerCase(),
+          name: n.name || '(unnamed)'
+        }));
+      })
+      .catch(() => {
+        if (!stale) conflicts = [];
+      })
+      .finally(() => {
+        if (!stale) conflictsLoading = false;
+      });
+    return () => {
+      stale = true;
+    };
+  });
 
   // Derive a candidate prefix from a pasted pubkey.
   $effect(() => {
@@ -287,7 +324,7 @@
     <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
       <div class="rounded-lg border border-edge bg-elev p-3">
         <div class="text-[10px] uppercase tracking-wide text-muted">Nodes counted</div>
-        <div class="mt-0.5 text-lg font-semibold text-ink">{scan.sampled.toLocaleString()}</div>
+        <div class="mt-0.5 text-lg font-semibold text-ink">{analysis.counted.toLocaleString()}</div>
       </div>
       <div class="rounded-lg border border-edge bg-elev p-3">
         <div class="text-[10px] uppercase tracking-wide text-muted">Prefixes used</div>
@@ -306,70 +343,84 @@
       </div>
     </div>
 
-    {#if scan.capped}
-      <p class="mb-4 flex items-center gap-1.5 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
-        <TriangleAlert size={14} /> The network has {scan.total.toLocaleString()} matching nodes but the API returns at most 200 —
-        this is a sample, so occupancy is approximate.
-      </p>
-    {/if}
-
     <div class="grid gap-6 lg:grid-cols-[1fr_18rem]">
       <div class="rounded-2xl border border-edge bg-elev p-4">
         {#if hexLen === 2}
           <!-- The 16×16 prefix map (1-byte only) -->
-          <div class="mb-3 flex items-center justify-between">
+          <div class="mb-3 flex items-center justify-between gap-3">
             <h2 class="text-sm font-semibold text-ink">Prefix map (00–ff)</h2>
             <div class="flex items-center gap-2 text-[10px] text-muted">
               <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
-              <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-warn/60"></span>1–2</span>
-              <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-bad/70"></span>3+</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="h-2.5 w-16 rounded-sm" style="background:linear-gradient(90deg, hsl(48 65% 45%), hsl(0 65% 45%));"></span>
+                1 → more
+              </span>
             </div>
           </div>
-          <div class="grid grid-cols-16 gap-1">
+          <div class="pf-grid">
             {#each analysis.counts as count, i (i)}
               <button
                 type="button"
                 onclick={() => (candidate = hex2(i))}
                 title={`${hex2(i)} — ${count} node${count === 1 ? '' : 's'}`}
-                class="flex aspect-square items-center justify-center rounded-sm font-mono text-[9px] transition-colors {cellClass(
-                  count,
-                  i === candidateIdx
-                )}"
+                style={cellStyle(count, analysis.maxCount, i === candidateIdx)}
+                class="flex aspect-square items-center justify-center rounded-sm font-mono text-[9px] leading-none {count
+                  ? ''
+                  : 'bg-elev2 text-muted'} {i === candidateIdx ? 'ring-2 ring-accent2' : ''}"
               >
-                {count || ''}
+                {hex2(i)}
               </button>
             {/each}
           </div>
           <p class="mt-3 text-xs text-muted">
-            Click any cell to inspect that prefix. Numbers show how many counted nodes share it.
+            Each cell is a prefix (00–ff); colour shows how crowded it is. Click one to inspect it.
           </p>
         {:else}
-          <!-- Used-prefix list (wider prefixes — the space is too large to grid) -->
-          <div class="mb-3 flex items-center justify-between">
-            <h2 class="text-sm font-semibold text-ink">Taken prefixes ({hexLen} hex)</h2>
-            <span class="text-[10px] text-muted">{analysis.used.length} in use</span>
+          <!-- Canvas heatmap of the whole space (too large for DOM cells) -->
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 class="text-sm font-semibold text-ink">Prefix map ({hexLen} hex · {analysis.totalSpace.toLocaleString()})</h2>
+            <div class="flex items-center gap-2 text-[10px] text-muted">
+              <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="h-2.5 w-16 rounded-sm" style="background:linear-gradient(90deg, hsl(48 65% 50%), hsl(0 65% 50%));"></span>
+                1 → more
+              </span>
+            </div>
           </div>
           {#if analysis.used.length === 0}
             <p class="py-8 text-center text-sm text-muted">No nodes matched.</p>
           {:else}
-            <div class="grid gap-1.5 sm:grid-cols-2">
-              {#each analysis.used as u (u.prefix)}
-                <button
-                  type="button"
-                  onclick={() => (candidate = u.prefix)}
-                  class="flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors hover:border-accent {u.count >
-                  1
-                    ? 'border-bad/40 bg-bad/10'
-                    : 'border-edge bg-bg'}"
-                >
-                  <span class="truncate font-mono text-xs {u.count > 1 ? 'text-bad' : 'text-ink'}">{u.prefix}</span>
-                  <span class="shrink-0 text-[11px] text-muted">{u.count} node{u.count === 1 ? '' : 's'}</span>
-                </button>
-              {/each}
-            </div>
+            <PrefixCanvas
+              prefixes={analysis.used}
+              bytes={Number(prefixBytes)}
+              maxCount={analysis.maxCount}
+              selected={candidateNorm}
+              onpick={(p) => (candidate = p)}
+            />
             <p class="mt-3 text-xs text-muted">
-              Highlighted rows are prefixes shared by more than one node. Click one to inspect it.
+              Every prefix in the {analysis.totalSpace.toLocaleString()}-cell space; occupied ones are coloured by
+              crowdedness. Hover to read a prefix, click to inspect it.
             </p>
+
+            {#if analysis.used.some((u) => u.count > 1)}
+              <div class="mt-4 border-t border-edge pt-3">
+                <div class="mb-2 text-xs font-semibold text-bad">
+                  Collisions — prefixes shared by more than one node
+                </div>
+                <div class="grid gap-1.5 sm:grid-cols-2">
+                  {#each analysis.used.filter((u) => u.count > 1) as u (u.prefix)}
+                    <button
+                      type="button"
+                      onclick={() => (candidate = u.prefix)}
+                      class="flex items-center justify-between gap-2 rounded-md border border-bad/40 bg-bad/10 px-2.5 py-1.5 text-left hover:border-accent"
+                    >
+                      <span class="truncate font-mono text-xs text-bad">{u.prefix}</span>
+                      <span class="shrink-0 text-[11px] text-muted">{u.count} nodes</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -420,23 +471,29 @@
 
           {#if candidateNorm.length === hexLen}
             <div class="mt-3 border-t border-edge pt-3">
-              {#if conflicts.length === 0}
+              {#if candidateCount === 0}
                 <p class="text-sm text-ok">
                   Prefix <span class="font-mono font-semibold">{candidateNorm}</span> is free on this network. 🎉
                 </p>
               {:else}
                 <p class="text-sm text-bad">
                   <span class="font-mono font-semibold">{candidateNorm}</span> is used by
-                  {conflicts.length} node{conflicts.length === 1 ? '' : 's'}:
+                  {candidateCount} node{candidateCount === 1 ? '' : 's'}:
                 </p>
-                <ul class="mt-2 space-y-1">
-                  {#each conflicts as c (c.pubkey)}
-                    <li class="flex items-center justify-between gap-2 rounded border border-edge bg-bg px-2 py-1 text-xs">
-                      <span class="truncate text-ink">{c.name}</span>
-                      <span class="shrink-0 font-mono text-muted">{c.pubkey.slice(0, Math.max(8, hexLen))}…</span>
-                    </li>
-                  {/each}
-                </ul>
+                {#if conflictsLoading && conflicts.length === 0}
+                  <p class="mt-2 flex items-center gap-1.5 text-xs text-muted">
+                    <Loader2 size={13} class="animate-spin" /> Loading nodes…
+                  </p>
+                {:else}
+                  <ul class="mt-2 space-y-1">
+                    {#each conflicts as c (c.pubkey)}
+                      <li class="flex items-center justify-between gap-2 rounded border border-edge bg-bg px-2 py-1 text-xs">
+                        <span class="truncate text-ink">{c.name}</span>
+                        <span class="shrink-0 font-mono text-muted">{c.pubkey.slice(0, Math.max(8, hexLen))}…</span>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -451,8 +508,11 @@
 </section>
 
 <style>
-  /* Tailwind has no 16-column grid utility out of the box. */
-  :global(.grid-cols-16) {
+  /* 16×16 prefix grid. Plain CSS (not Tailwind utilities) so 256 cells lay out
+     in one pass without per-cell class churn. */
+  .pf-grid {
+    display: grid;
     grid-template-columns: repeat(16, minmax(0, 1fr));
+    gap: 4px;
   }
 </style>

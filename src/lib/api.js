@@ -40,6 +40,33 @@ export function search({ q, net, filters, limit } = {}, signal) {
   });
 }
 
+/**
+ * Full prefix-occupancy histogram for a network at a given prefix width. Unlike
+ * `search`, this is not capped — the API groups every matching node server-side,
+ * so the Prefix Finder sees complete occupancy and every conflict.
+ * @param {object} p
+ * @param {string} p.net network id (required)
+ * @param {number} [p.bytes] prefix width in bytes (1–3, default 1)
+ * @param {{key:string,value:string,radiusKm?:number}[]} [p.filters] e.g. a `near` area filter
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{bytes:number,counted:number,space:number,used:number,collisions:number,
+ *   prefixes:{prefix:string,count:number,nodes:{pubkey:string,name:string,type:number,typeName:string}[]}[]}>}
+ */
+export function prefixes({ net, bytes = 1, filters } = {}, signal) {
+  const sp = new URLSearchParams();
+  sp.set('networks', net);
+  sp.set('bytes', String(bytes));
+  for (const f of filters ?? []) {
+    if (!f?.key || f.value == null || f.value === '') continue;
+    sp.append(f.key, String(f.value));
+    if (f.key === 'near' && f.radiusKm) sp.set('radius', String(f.radiusKm));
+  }
+  return fetch(`${API_BASE}/api/prefixes?${sp.toString()}`, { signal }).then((r) => {
+    if (!r.ok) throw new Error(`prefixes ${r.status}`);
+    return r.json();
+  });
+}
+
 let networksPromise;
 /**
  * The network list (id + name), for the network picker. Fetched once and
