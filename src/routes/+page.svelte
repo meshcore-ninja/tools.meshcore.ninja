@@ -14,16 +14,11 @@
 
 <section class="mx-auto w-full max-w-6xl px-4">
   <div class="py-14 sm:py-20">
-    <div class="inline-flex items-center gap-2 rounded-full border border-edge bg-elev px-3 py-1 text-xs text-dim">
-      <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
-      MeshCore Ninja
-    </div>
     <h1 class="mt-5 max-w-2xl text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
       Small, focused tools for MeshCore
     </h1>
     <p class="mt-4 max-w-2xl text-base leading-relaxed text-dim">
-      Not another map, client or dashboard — just sharp utilities that convert and explain
-      MeshCore-specific data. Everything runs in your browser.
+      Browser-based utilities that convert and explain MeshCore-specific data.
     </p>
   </div>
 
