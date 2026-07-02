@@ -1,6 +1,6 @@
 // The catalog of tools, shared by the landing page and the header nav so both
 // stay in sync. Icons are Lucide component names, resolved where rendered.
-import { QrCode, RadioTower, Fingerprint } from '@lucide/svelte';
+import { QrCode, Timer, Fingerprint } from '@lucide/svelte';
 
 export const TOOLS = [
   {
@@ -12,12 +12,12 @@ export const TOOLS = [
     icon: QrCode
   },
   {
-    slug: 'radio',
-    name: 'Radio & Airtime Calculator',
-    tagline: 'Time on air, duty cycle & collision pressure',
+    slug: 'airtime',
+    name: 'Airtime Calculator',
+    tagline: 'Time on air, channel use & collision pressure',
     description:
       'Work out LoRa time on air from bandwidth, spreading factor and payload, then scale it to a whole network — “700 repeaters advertising every 12 h” — and compare two radio profiles side by side.',
-    icon: RadioTower
+    icon: Timer
   },
   {
     slug: 'prefix',

@@ -1,5 +1,5 @@
 // LoRa time-on-air math (Semtech SX127x/SX126x reference formula) plus the
-// derived airtime / channel-utilisation figures the Radio & Airtime Calculator
+// derived airtime / channel-utilisation figures the Airtime Calculator
 // shows. Everything here is pure so it can be unit-tested and reused.
 
 /**
@@ -59,6 +59,19 @@ export function timeOnAir({
   };
 }
 
+/** MeshCore firmware preamble length: SF5-SF8 use 32 symbols, SF9-SF12 use 16. */
+export function meshCorePreamble(sf) {
+  return Number(sf) <= 8 ? 32 : 16;
+}
+
+/** Time on air using MeshCore firmware's adaptive preamble length. */
+export function meshCoreTimeOnAir(params) {
+  return timeOnAir({
+    ...params,
+    preamble: meshCorePreamble(params.sf)
+  });
+}
+
 /** Coding-rate "4/5".."4/8" string → cr offset 1..4. */
 export function crFromString(s) {
   const m = /^\s*4\s*\/\s*([5-8])\s*$/.exec(String(s ?? ''));
@@ -93,7 +106,7 @@ export function bitRate(sf, bwHz, cr) {
 export function networkLoad(toaSec, nodes, intervalSec) {
   const txPerHour = intervalSec > 0 ? (nodes * 3600) / intervalSec : 0;
   const airtimePerHourSec = txPerHour * toaSec;
-  const dutyCycle = airtimePerHourSec / 3600; // fraction of the channel occupied
+  const dutyCycle = airtimePerHourSec / 3600; // aggregate fraction of the channel occupied
   const airtimePerNodePerDaySec = intervalSec > 0 ? (86400 / intervalSec) * toaSec : 0;
   const secondsBetweenTx = txPerHour > 0 ? 3600 / txPerHour : Infinity;
   return { txPerHour, airtimePerHourSec, dutyCycle, airtimePerNodePerDaySec, secondsBetweenTx };

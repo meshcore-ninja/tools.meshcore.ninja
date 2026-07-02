@@ -1,7 +1,7 @@
 {
   "name": "tools-meshcore-ninja",
   "version": "0.1.0",
-  "description": "A collection of small, focused MeshCore utilities — QR studio, radio & airtime calculator, and prefix finder.",
+  "description": "A collection of small, focused MeshCore utilities — QR studio, airtime calculator, and prefix finder.",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

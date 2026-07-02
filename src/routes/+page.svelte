@@ -8,7 +8,7 @@
   <title>MeshCore Tools</title>
   <meta
     name="description"
-    content="A collection of small, focused MeshCore utilities — QR studio, radio & airtime calculator, and prefix finder."
+    content="A collection of small, focused MeshCore utilities — QR studio, airtime calculator, and prefix finder."
   />
 </svelte:head>
 

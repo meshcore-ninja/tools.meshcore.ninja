@@ -1,6 +1,6 @@
 <script>
   import { browser } from '$app/environment';
-  import { RadioTower, ArrowRightLeft, Package, Network } from '@lucide/svelte';
+  import { Timer, ArrowRightLeft, Package, Network } from '@lucide/svelte';
   import { meshNetworks } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
   import Switch from '$lib/ui/Switch.svelte';
@@ -10,6 +10,8 @@
   import { BUILTIN_PRESETS, BW_OPTIONS, SF_OPTIONS, CR_OPTIONS } from '$lib/radioPresets.js';
   import {
     timeOnAir,
+    meshCorePreamble,
+    meshCoreTimeOnAir,
     bitRate,
     crFromString,
     networkLoad,
@@ -17,6 +19,13 @@
     fmtDuration,
     fmtPct
   } from '$lib/airtime.js';
+
+  const PROFILE_MESHCORE = 'meshcore';
+  const PROFILE_STANDARD = 'standard';
+  const profileItems = [
+    { value: PROFILE_MESHCORE, label: 'MeshCore firmware' },
+    { value: PROFILE_STANDARD, label: 'Standard LoRa' }
+  ];
 
   // Radio configs A (+ optional B for comparison). Each carries the params that
   // drive time on air; frequency and TX power are informational context.
@@ -74,6 +83,7 @@
   // "network spread" that scales that packet across a whole mesh.
   let mode = $state('packet'); // 'packet' | 'spread'
   const spread = $derived(mode === 'spread');
+  let profile = $state(PROFILE_MESHCORE);
 
   let a = $state(defaultConfig());
   let b = $state(defaultConfig({ sf: 9, payload: 32 }));
@@ -149,13 +159,18 @@
     const sf = Number(cfg.sf);
     const bwHz = Number(cfg.bwKhz) * 1000;
     const cr = crFromString(cfg.cr);
-    const toa = timeOnAir({
+    const toaParams = {
       sf,
       bwHz,
       cr,
-      payload: Number(cfg.payload),
-      preamble: cfg.preamble
-    });
+      payload: Number(cfg.payload)
+    };
+    const preambleSymbols =
+      profile === PROFILE_MESHCORE ? meshCorePreamble(sf) : Number(cfg.preamble);
+    const toa =
+      profile === PROFILE_MESHCORE
+        ? meshCoreTimeOnAir(toaParams)
+        : timeOnAir({ ...toaParams, preamble: preambleSymbols });
     const rb = bitRate(sf, bwHz, cr);
     const load = networkLoad(toa.total, nodes, intervalSec);
     const framesPerSec = load.txPerHour / 3600;
@@ -169,7 +184,7 @@
         collision: collisionProbability(toa.total, l.txPerHour / 3600)
       };
     });
-    return { toa, rb, load, collision, sweep };
+    return { toa, rb, load, collision, sweep, preambleSymbols };
   }
 
   const ra = $derived(compute(a));
@@ -181,6 +196,7 @@
   if (browser) {
     const params = new URLSearchParams(location.search);
     mode = stringParam(params, 'mode', 'packet', ['packet', 'spread']);
+    profile = stringParam(params, 'profile', PROFILE_MESHCORE, [PROFILE_MESHCORE, PROFILE_STANDARD]);
     compare = params.get('compare') === '1';
     a = configFromParams(params, 'a_', defaultConfig());
     b = configFromParams(params, 'b_', defaultConfig({ sf: 9, payload: 32 }));
@@ -207,6 +223,7 @@
     if (!browser) return;
     const params = new URLSearchParams();
     if (mode !== 'packet') params.set('mode', mode);
+    if (profile !== PROFILE_MESHCORE) params.set('profile', profile);
     if (compare) params.set('compare', '1');
     writeConfigParams(params, 'a_', a, defaultConfig());
     if (compare) writeConfigParams(params, 'b_', b, defaultConfig({ sf: 9, payload: 32 }));
@@ -229,7 +246,7 @@
 </script>
 
 <svelte:head>
-  <title>Radio & Airtime Calculator — MeshCore Tools</title>
+  <title>Airtime Calculator — MeshCore Tools</title>
 </svelte:head>
 
 {#snippet configForm(cfg, target)}
@@ -291,7 +308,9 @@
     <div class="rounded-lg border border-edge bg-bg p-3">
       <div class="text-[10px] uppercase tracking-wide text-muted">Time on air</div>
       <div class="mt-0.5 text-lg font-semibold text-accent">{fmtDuration(r.toa.total)}</div>
-      <div class="text-[11px] text-muted">{r.toa.symbols} payload symbols{r.toa.lowDataRate ? ' · LDRO' : ''}</div>
+      <div class="text-[11px] text-muted">
+        {r.preambleSymbols} preamble · {r.toa.symbols} payload symbols{r.toa.lowDataRate ? ' · LDRO' : ''}
+      </div>
     </div>
     <div class="rounded-lg border border-edge bg-bg p-3">
       <div class="text-[10px] uppercase tracking-wide text-muted">Bit rate</div>
@@ -344,7 +363,7 @@
         ></div>
       </div>
       <div class="mt-1 flex justify-between text-[10px] text-muted">
-        <span>0%</span><span>1% EU duty limit</span><span>100%</span>
+        <span>0%</span><span>1% per-device reference</span><span>100%</span>
       </div>
     </div>
 
@@ -378,14 +397,14 @@
 <section class="mx-auto w-full max-w-6xl px-4 py-8">
   <header class="mb-6 flex items-start gap-3">
     <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-edge bg-elev text-accent">
-      <RadioTower size={22} />
+      <Timer size={22} />
     </span>
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight text-ink">Radio & Airtime Calculator</h1>
+      <h1 class="text-2xl font-semibold tracking-tight text-ink">Airtime Calculator</h1>
       <p class="mt-1 text-sm text-dim">
         {#if spread}
           Scale one packet across a whole mesh — “700 repeaters advertising every 12 hours” — with
-          duty cycle and collision pressure.
+          aggregate channel utilisation and collision pressure.
         {:else}
           LoRa time on air and bit rate for a single packet. Paste a raw packet or set the payload,
           then turn on network spread to scale it across a mesh.
@@ -403,6 +422,10 @@
         { value: 'spread', label: 'Network spread', icon: Network }
       ]}
     />
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs font-medium text-dim">Calculation profile</span>
+      <SegmentedGroup bind:value={profile} size="sm" items={profileItems} />
+    </div>
     <label class="ml-auto inline-flex cursor-pointer items-center gap-2.5 text-sm text-dim">
       <Switch bind:checked={compare} />
       Compare a second config
@@ -470,8 +493,10 @@
 
   <p class="mx-auto mt-6 max-w-3xl text-center text-xs leading-relaxed text-muted">
     Time on air uses the Semtech LoRa reference formula (explicit header, CRC on, low-data-rate
-    optimisation auto-enabled when the symbol time exceeds 16 ms). Collision pressure is a rough
-    unslotted-ALOHA estimate — real meshes add flood re-broadcasts and CSMA, so treat it as a
-    relative gauge, not a guarantee.
+    optimisation auto-enabled when the symbol time exceeds 16 ms). MeshCore firmware mode uses
+    MeshCore’s adaptive preamble: 32 symbols for SF5-SF8 and 16 for SF9-SF12. Network spread is
+    aggregate offered channel load, not a regulatory per-device duty cycle. Collision pressure is
+    a rough unslotted-ALOHA estimate — real meshes add flood re-broadcasts and CSMA, so treat it
+    as a relative gauge, not a guarantee.
   </p>
 </section>
