@@ -190,8 +190,12 @@
       }
     }
 
-    // Used prefixes, most-crowded first (the API already sorts this way).
     const used = (data.prefixes ?? []).map((p) => ({ prefix: p.prefix, count: p.count }));
+    const topCollisions = used
+      .filter((p) => p.count > 1)
+      .sort((a, b) => b.count - a.count || a.prefix.localeCompare(b.prefix))
+      .slice(0, 30);
+
     return {
       countMap,
       counts,
@@ -201,7 +205,8 @@
       collisions: data.collisions,
       counted: data.counted,
       suggestions,
-      used
+      used,
+      topCollisions
     };
   });
 
@@ -479,6 +484,27 @@
               crowdedness. Hover to read a prefix, scroll to zoom, drag to pan, click to inspect it.
             </p>
           {/if}
+        {/if}
+
+        {#if analysis.topCollisions.length > 0}
+          <div class="mt-4 border-t border-edge pt-3">
+            <div class="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink">
+              <TriangleAlert size={14} class="text-bad" /> Most collisions
+            </div>
+            <div class="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+              {#each analysis.topCollisions as c (c.prefix)}
+                <button
+                  type="button"
+                  onclick={() => (candidate = c.prefix)}
+                  class="flex items-center justify-between gap-2 rounded-md border border-edge bg-bg px-2.5 py-1.5 text-left hover:border-accent"
+                  title={`${c.prefix} — ${c.count} nodes`}
+                >
+                  <span class="truncate font-mono text-xs text-ink">{c.prefix}</span>
+                  <span class="shrink-0 text-[11px] font-medium text-bad">{c.count} nodes</span>
+                </button>
+              {/each}
+            </div>
+          </div>
         {/if}
       </div>
 
