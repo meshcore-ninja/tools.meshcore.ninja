@@ -8,7 +8,7 @@
   <title>MeshCore Tools</title>
   <meta
     name="description"
-    content="A collection of small, focused MeshCore utilities — QR studio, airtime calculator, and prefix finder."
+    content="MeshCore utilities for QR codes, firmware-aware LoRa airtime calculations, and global or network prefix analysis."
   />
 </svelte:head>
 
@@ -18,7 +18,8 @@
       Small, focused tools for MeshCore
     </h1>
     <p class="mt-4 max-w-2xl text-base leading-relaxed text-dim">
-      Browser-based utilities that convert and explain MeshCore-specific data.
+      Browser-based utilities for MeshCore QR codes, LoRa airtime planning, and public-key prefix
+      crowding across global or network-scoped node data.
     </p>
   </div>
 
