@@ -2,6 +2,7 @@
   import '../app.css';
   import { base } from '$app/paths';
   import { page } from '$app/stores';
+  import { Tooltip } from 'bits-ui';
   import { TOOLS } from '$lib/tools.js';
 
   let { children } = $props();
@@ -69,7 +70,9 @@
   </header>
 
   <main class="flex min-w-0 flex-1 flex-col pb-12">
-    {@render children?.()}
+    <Tooltip.Provider>
+      {@render children?.()}
+    </Tooltip.Provider>
   </main>
 
   <footer class="border-t border-edge text-xs text-dim">

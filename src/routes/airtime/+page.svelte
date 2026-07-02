@@ -1,6 +1,7 @@
 <script>
   import { browser } from '$app/environment';
-  import { Timer, ArrowRightLeft, Package, Network } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import { Timer, ArrowRightLeft, Package, Network, CircleQuestionMark } from '@lucide/svelte';
   import { meshNetworks } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
   import Switch from '$lib/ui/Switch.svelte';
@@ -249,10 +250,98 @@
   <title>Airtime Calculator — MeshCore Tools</title>
 </svelte:head>
 
+{#snippet helpTip(text, kind = '', href = '', linkText = 'Learn more')}
+  <Tooltip.Root>
+    <Tooltip.Trigger
+      class="inline-grid h-4 w-4 shrink-0 place-items-center rounded-full text-muted outline-none hover:text-accent focus-visible:text-accent focus-visible:ring-1 focus-visible:ring-accent"
+      aria-label="More information"
+    >
+      <CircleQuestionMark size={13} aria-hidden="true" />
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content
+        side="top"
+        sideOffset={6}
+        class="z-50 max-w-72 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+      >
+        {#if kind}
+          <div class="mb-2 rounded-md border border-edge/80 bg-bg/70 px-2 py-2">
+            {#if kind === 'bandwidth'}
+              <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-accent2/15 px-1.5 py-0.5 text-accent2">narrow</span>
+                <span class="text-muted">longer symbols</span>
+                <span class="text-muted">/</span>
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">wide</span>
+                <span class="text-muted">shorter symbols</span>
+              </div>
+            {:else if kind === 'spreading'}
+              <div class="flex items-center gap-1 text-[10px]">
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">SF7 fast</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-accent/25 px-1.5 py-0.5 text-accent">SF9</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-accent/35 px-1.5 py-0.5 text-accent">SF12 long</span>
+              </div>
+            {:else if kind === 'coding'}
+              <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">4/5 less repair</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-warn/15 px-1.5 py-0.5 text-warn">4/8 more repair</span>
+              </div>
+            {:else if kind === 'preamble'}
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-accent2/15 px-1.5 py-0.5 text-accent2">preamble</span>
+                <span class="text-muted">then</span>
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">encoded data</span>
+              </div>
+            {:else if kind === 'symbols'}
+              <div class="flex flex-wrap items-center gap-1 text-[10px]">
+                {#each ['symbol', 'symbol', 'symbol'] as label}
+                  <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">{label}</span>
+                {/each}
+                <span class="text-muted">not bytes</span>
+              </div>
+            {:else if kind === 'load'}
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">idle</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-warn/15 px-1.5 py-0.5 text-warn">offered load</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-bad/15 px-1.5 py-0.5 text-bad">busy</span>
+              </div>
+            {:else if kind === 'collision'}
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">frame A</span>
+                <span class="rounded bg-bad/15 px-1.5 py-0.5 text-bad">overlaps B</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        {text}
+        {#if href}
+          <a class="mt-2 block text-accent2 hover:underline" href={href} target="_blank" rel="noreferrer">
+            {linkText} ↗
+          </a>
+        {/if}
+        <Tooltip.Arrow class="text-edge" />
+      </Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+{/snippet}
+
+{#snippet labelHelp(label, help, kind = '', href = '', linkText = 'Learn more')}
+  <span class="inline-flex items-center gap-1">
+    <span>{label}</span>
+    {@render helpTip(help, kind, href, linkText)}
+  </span>
+{/snippet}
+
 {#snippet configForm(cfg, target)}
   <div class="grid grid-cols-2 gap-3">
     <div class="col-span-2 block">
-      <span class="mb-1 block text-xs font-medium text-dim">Preset</span>
+      <span class="mb-1 block text-xs font-medium text-dim">
+        {@render labelHelp('Preset', 'Loads bandwidth, spreading factor and coding rate used by a known profile or MeshCore network. A preset is a convenient starting point; it does not verify your device configuration or legal limits at your frequency and location.')}
+      </span>
       <Select
         placeholder="Load a preset…"
         groups={presetGroups}
@@ -267,23 +356,34 @@
 
     <div class="col-span-2 grid grid-cols-3 gap-3">
       <div class="block">
-        <span class="mb-1 block text-xs font-medium text-dim">Bandwidth (kHz)</span>
+        <span class="mb-1 block text-xs font-medium text-dim">
+          {@render labelHelp('Bandwidth (kHz)', 'The width of the LoRa radio channel. Wider bandwidth makes symbols shorter and reduces airtime; narrower bandwidth generally improves sensitivity but occupies the channel for longer.', 'bandwidth')}
+        </span>
         <Select bind:value={cfg.bwKhz} items={BW_OPTIONS.map((bw) => ({ value: bw, label: `${bw}` }))} />
       </div>
       <div class="block">
-        <span class="mb-1 block text-xs font-medium text-dim">Spreading factor</span>
+        <span class="mb-1 block text-xs font-medium text-dim">
+          {@render labelHelp('Spreading factor', 'Controls how many LoRa chips represent each symbol. Higher SF usually improves weak-signal reception, but it greatly increases symbol duration, packet airtime and channel usage.', 'spreading')}
+        </span>
         <Select bind:value={cfg.sf} items={SF_OPTIONS.map((sf) => ({ value: sf, label: `SF${sf}` }))} />
       </div>
       <div class="block">
-        <span class="mb-1 block text-xs font-medium text-dim">Coding rate</span>
+        <span class="mb-1 block text-xs font-medium text-dim">
+          {@render labelHelp('Coding rate', 'Forward-error-correction redundancy. 4/5 has the least redundancy and shortest airtime; 4/8 adds the most redundancy and longest airtime. More redundancy can help with interference but does not guarantee reception.', 'coding')}
+        </span>
         <Select bind:value={cfg.cr} items={CR_OPTIONS.map((cr) => ({ value: cr, label: cr }))} />
       </div>
     </div>
-    <NumberSlider class="col-span-2" label="Payload" bind:value={cfg.payload} min={1} max={255} suffix="bytes" />
+    <div class="col-span-2">
+      <div class="mb-1 text-xs font-medium text-dim">
+        {@render labelHelp('Payload', 'The number of bytes handed to the LoRa radio as the packet body. For a raw MeshCore packet, use the length of the entire raw packet, not only the message text. Airtime increases in symbol-sized steps.', 'symbols')}
+      </div>
+      <NumberSlider bind:value={cfg.payload} min={1} max={255} suffix="bytes" />
+    </div>
 
     <label class="col-span-2 block">
       <span class="mb-1 block text-xs font-medium text-dim">
-        Or paste a packet (hex) to size the payload
+        {@render labelHelp('Or paste a packet (hex) to size the payload', 'Paste the complete raw packet as hexadecimal bytes. Spaces, line breaks and separators are ignored; every complete pair of hex digits counts as one byte. The calculator uses only the byte count; it does not decode or validate the packet.')}
       </span>
       <input
         class="{inputClass} font-mono"
@@ -306,47 +406,61 @@
   <!-- Packet-level metrics: always shown -->
   <div class="grid grid-cols-2 gap-3">
     <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Time on air</div>
+      <div class="text-[10px] uppercase tracking-wide text-muted">
+        {@render labelHelp('Time on air', 'The time from the beginning of the transmitted LoRa preamble until the end of the encoded packet. It is radio-channel occupancy, not end-to-end MeshCore message latency.', 'preamble')}
+      </div>
       <div class="mt-0.5 text-lg font-semibold text-accent">{fmtDuration(r.toa.total)}</div>
       <div class="text-[11px] text-muted">
         {r.preambleSymbols} preamble · {r.toa.symbols} payload symbols{r.toa.lowDataRate ? ' · LDRO' : ''}
       </div>
     </div>
     <div class="rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Bit rate</div>
+      <div class="text-[10px] uppercase tracking-wide text-muted">
+        {@render labelHelp('Nominal PHY bit rate', 'The theoretical LoRa bit rate from bandwidth, spreading factor and coding rate. It does not include preamble, header, CRC or packet-boundary overhead. Actual useful throughput is lower.')}
+      </div>
       <div class="mt-0.5 text-lg font-semibold text-ink">{(r.rb / 1000).toFixed(2)} kbps</div>
       <div class="text-[11px] text-muted">{cfg.payload} B payload</div>
     </div>
     <div class="col-span-2 rounded-lg border border-edge bg-bg p-3">
-      <div class="text-[10px] uppercase tracking-wide text-muted">Airtime breakdown</div>
+      <div class="text-[10px] uppercase tracking-wide text-muted">
+        {@render labelHelp('Airtime breakdown', 'Shows how total transmission time is divided between receiver-detection overhead and the encoded data section. Longer MeshCore preambles can dominate very small packets.', 'preamble')}
+      </div>
       <div class="mt-1 flex overflow-hidden rounded" style="height: 8px;">
         <div class="h-full bg-accent2" style="width: {(r.toa.preamble / r.toa.total) * 100}%" title="Preamble"></div>
         <div class="h-full bg-accent" style="width: {(r.toa.payload / r.toa.total) * 100}%" title="Payload"></div>
       </div>
       <div class="mt-1.5 flex justify-between text-[11px] text-muted">
         <span><span class="text-accent2">■</span> Preamble {fmtDuration(r.toa.preamble)}</span>
-        <span><span class="text-accent">■</span> Payload {fmtDuration(r.toa.payload)}</span>
+        <span><span class="text-accent">■</span> Encoded data {fmtDuration(r.toa.payload)}</span>
       </div>
     </div>
 
     {#if spread}
       <div class="rounded-lg border border-edge bg-bg p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Packets / hour</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Packets / hour', 'Average number of originating transmissions produced by all modelled nodes in one hour. This is a traffic rate; packets may still cluster because nodes are not synchronised.')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold text-ink">{Math.round(r.load.txPerHour).toLocaleString()}</div>
         <div class="text-[11px] text-muted">≈ one every {fmtDuration(r.load.secondsBetweenTx)}</div>
       </div>
       <div class="rounded-lg border border-edge bg-bg p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Channel utilisation</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Offered channel load', 'The sum of all calculated packet airtimes divided by the observation period. A value of 5% means the model generates airtime equal to 5% of one hour. This is aggregate channel load, not a regulatory per-device duty cycle.', 'load')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold {dutyClass(r.load.dutyCycle)}">{fmtPct(r.load.dutyCycle)}</div>
         <div class="text-[11px] text-muted">{fmtDuration(r.load.airtimePerHourSec)} of airtime / hour</div>
       </div>
       <div class="rounded-lg border border-edge bg-bg p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Traffic / node / day</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Traffic / node / day', 'How much airtime one modelled node contributes per day at the selected interval, before accounting for forwarding, rebroadcasts, retries or replies.')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold text-ink">{fmtDuration(r.load.airtimePerNodePerDaySec)}</div>
         <div class="text-[11px] text-muted">of airtime each</div>
       </div>
       <div class="rounded-lg border border-edge bg-bg p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Collision pressure</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Collision pressure', 'A rough unslotted-ALOHA estimate of the chance that a frame overlaps at least one other frame. It is useful as a relative warning light, not a full MeshCore simulation.', 'collision')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold {dutyClass(r.collision)}">{fmtPct(r.collision)}</div>
         <div class="text-[11px] text-muted">chance a frame overlaps</div>
       </div>
@@ -375,9 +489,15 @@
       <table class="w-full text-left text-xs">
         <thead class="text-muted">
           <tr class="border-b border-edge">
-            <th class="px-3 py-1.5 font-medium">Nodes</th>
-            <th class="px-3 py-1.5 text-right font-medium">Channel use</th>
-            <th class="px-3 py-1.5 text-right font-medium">Collision</th>
+            <th class="px-3 py-1.5 font-medium">
+              {@render labelHelp('Nodes', 'Number of nodes assumed to generate this type of transmission. Count only nodes that actually send the modelled packet at the selected interval.')}
+            </th>
+            <th class="px-3 py-1.5 text-right font-medium">
+              {@render labelHelp('Channel use', 'Aggregate offered channel load for this node count and interval. It is not the regulatory duty cycle of a single device.', 'load')}
+            </th>
+            <th class="px-3 py-1.5 text-right font-medium">
+              {@render labelHelp('Collision', 'Estimated probability that a frame overlaps another frame under the simplified unslotted-ALOHA model.', 'collision')}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -423,7 +543,9 @@
       ]}
     />
     <div class="flex flex-wrap items-center gap-2">
-      <span class="text-xs font-medium text-dim">Calculation profile</span>
+      <span class="text-xs font-medium text-dim">
+        {@render labelHelp('Calculation profile', 'Selects packet-format assumptions used by the calculation. MeshCore firmware mode uses the current MeshCore adaptive preamble; generic LoRa uses a common 8-symbol preamble.', 'preamble')}
+      </span>
       <SegmentedGroup bind:value={profile} size="sm" items={profileItems} />
     </div>
     <label class="ml-auto inline-flex cursor-pointer items-center gap-2.5 text-sm text-dim">
@@ -435,10 +557,17 @@
   {#if spread}
     <!-- Network scenario (spread mode only) -->
     <div class="mb-6 grid gap-5 rounded-2xl border border-edge bg-elev p-4 sm:grid-cols-2">
-      <NumberSlider label="Number of nodes" bind:value={nodes} min={1} max={10000} suffix="nodes" />
+      <div>
+        <div class="mb-1 text-xs font-medium text-dim">
+          {@render labelHelp('Number of nodes', 'The number of nodes assumed to generate this type of transmission. Count only nodes that actually send the modelled packet at the selected interval, not every device that merely exists in the network.')}
+        </div>
+        <NumberSlider bind:value={nodes} min={1} max={10000} suffix="nodes" />
+      </div>
       <div>
         <div class="mb-1 flex items-baseline justify-between gap-2">
-          <span class="text-xs font-medium text-dim">Each transmits every</span>
+          <span class="text-xs font-medium text-dim">
+            {@render labelHelp('Each transmits every', 'Average time between transmissions from each modelled node. For example, 700 nodes transmitting once every 12 hours produce 1,400 originating transmissions per day before rebroadcasts or retries.')}
+          </span>
           <span class="font-mono text-xs text-ink">
             {intervalLabel} · {Math.round(txPerDay).toLocaleString()}/day
           </span>

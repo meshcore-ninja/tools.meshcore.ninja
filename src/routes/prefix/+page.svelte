@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { Fingerprint, LocateFixed, Loader2, TriangleAlert, Search, Sparkles } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import { Fingerprint, LocateFixed, Loader2, TriangleAlert, Search, Sparkles, CircleQuestionMark } from '@lucide/svelte';
   import { networks, prefixes, search } from '$lib/api.js';
   import Select from '$lib/ui/Select.svelte';
   import Checkbox from '$lib/ui/Checkbox.svelte';
@@ -309,6 +310,57 @@
   <title>Prefix Finder — MeshCore Tools</title>
 </svelte:head>
 
+{#snippet helpTip(text, kind = '')}
+  <Tooltip.Root>
+    <Tooltip.Trigger
+      class="inline-grid h-4 w-4 shrink-0 place-items-center rounded-full text-muted outline-none hover:text-accent focus-visible:text-accent focus-visible:ring-1 focus-visible:ring-accent"
+      aria-label="More information"
+    >
+      <CircleQuestionMark size={13} aria-hidden="true" />
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content
+        side="top"
+        sideOffset={6}
+        class="z-50 max-w-72 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+      >
+        {#if kind}
+          <div class="mb-2 rounded-md border border-edge/80 bg-bg/70 px-2 py-2">
+            {#if kind === 'space'}
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-elev2 px-1.5 py-0.5 text-muted">free</span>
+                <span class="rounded bg-warn/15 px-1.5 py-0.5 text-warn">used</span>
+                <span class="rounded bg-bad/15 px-1.5 py-0.5 text-bad">crowded</span>
+              </div>
+            {:else if kind === 'reserved'}
+              <div class="flex items-center gap-1 text-[10px]">
+                <span class="rounded bg-elev2 px-1.5 py-1 font-mono text-[10px] text-muted">00</span>
+                <span class="rounded bg-accent/15 px-1.5 py-1 font-mono text-[10px] text-accent">01-FE</span>
+                <span class="rounded bg-elev2 px-1.5 py-1 font-mono text-[10px] text-muted">FF</span>
+              </div>
+            {:else if kind === 'collision'}
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span class="rounded bg-warn/15 px-1.5 py-0.5 text-warn">2 nodes</span>
+                <span class="text-muted">→</span>
+                <span class="rounded bg-bad/15 px-1.5 py-0.5 text-bad">more crowded</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        {text}
+        <Tooltip.Arrow class="text-edge" />
+      </Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+{/snippet}
+
+{#snippet labelHelp(label, help, kind = '')}
+  <span class="inline-flex items-center gap-1">
+    <span>{label}</span>
+    {@render helpTip(help, kind)}
+  </span>
+{/snippet}
+
 <section class="mx-auto w-full max-w-6xl px-4 py-8">
   <header class="mb-6 flex items-start gap-3">
     <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-edge bg-elev text-accent">
@@ -328,7 +380,9 @@
   <div class="mb-6 rounded-2xl border border-edge bg-elev p-4">
     <div class="flex flex-wrap items-end gap-x-4 gap-y-3">
       <div class="block">
-        <span class="mb-1 block text-xs font-medium text-dim">Network</span>
+        <span class="mb-1 block text-xs font-medium text-dim">
+          {@render labelHelp('Network', 'Choose a single MeshCore network catalog, or Global to count matching public-key prefixes across all observed nodes.')}
+        </span>
         <div class="w-56">
           <Select bind:value={net} items={networkItems} placeholder="Choose a network…" />
         </div>
@@ -338,7 +392,9 @@
       </div>
 
       <div class="block">
-        <span class="mb-1 block text-xs font-medium text-dim">Prefix width</span>
+        <span class="mb-1 block text-xs font-medium text-dim">
+          {@render labelHelp('Prefix width', 'How many leading public-key bytes to inspect. One byte shows MeshCore routing-prefix pressure; wider views help explore rarer vanity prefixes.', 'space')}
+        </span>
         <SegmentedGroup
           bind:value={prefixBytes}
           size="sm"
@@ -351,7 +407,8 @@
       </div>
 
       <label class="inline-flex cursor-pointer items-center gap-2 pb-1.5 text-sm text-dim">
-        <Checkbox bind:checked={useLocation} /> Limit to an area
+        <Checkbox bind:checked={useLocation} />
+        {@render labelHelp('Limit to an area', 'Count only nodes near the chosen latitude/longitude within the selected radius. Useful when choosing a prefix for a local deployment.')}
       </label>
 
       <button
@@ -368,15 +425,21 @@
     {#if useLocation}
       <div class="mt-4 flex flex-wrap items-end gap-x-4 gap-y-3 border-t border-edge pt-4">
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-dim">Latitude</span>
+          <span class="mb-1 block text-xs font-medium text-dim">
+            {@render labelHelp('Latitude', 'Center latitude for the area filter, in decimal degrees.')}
+          </span>
           <input class="{inputClass} w-28" bind:value={lat} placeholder="50.075" />
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-dim">Longitude</span>
+          <span class="mb-1 block text-xs font-medium text-dim">
+            {@render labelHelp('Longitude', 'Center longitude for the area filter, in decimal degrees.')}
+          </span>
           <input class="{inputClass} w-28" bind:value={lon} placeholder="14.437" />
         </label>
         <div class="block w-56">
-          <span class="mb-1 block text-xs font-medium text-dim">Radius — {radiusKm} km</span>
+          <span class="mb-1 block text-xs font-medium text-dim">
+            {@render labelHelp(`Radius — ${radiusKm} km`, 'Distance around the selected center point used for the local prefix count.')}
+          </span>
           <div class="flex h-8 items-center">
             <Slider bind:value={radiusKm} min={1} max={200} step={1} />
           </div>
@@ -400,20 +463,28 @@
     <!-- Summary -->
     <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
       <div class="rounded-lg border border-edge bg-elev p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Nodes counted</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Nodes counted', 'Number of nodes included in this prefix scan after network and optional area filters.')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold text-ink">{analysis.counted.toLocaleString()}</div>
       </div>
       <div class="rounded-lg border border-edge bg-elev p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Prefixes used</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Prefixes used', 'How many distinct prefixes currently appear among the counted nodes.')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold text-warn">{analysis.usedCount.toLocaleString()}</div>
       </div>
       <div class="rounded-lg border border-edge bg-elev p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Prefix space</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Prefix space', 'Total number of possible prefixes at the selected width: 256 for one byte, 65,536 for two bytes, and 16,777,216 for three bytes.', 'space')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold text-ink">{analysis.totalSpace.toLocaleString()}</div>
         <div class="text-[11px] text-muted">{hexLen} hex chars</div>
       </div>
       <div class="rounded-lg border border-edge bg-elev p-3">
-        <div class="text-[10px] uppercase tracking-wide text-muted">Collisions</div>
+        <div class="text-[10px] uppercase tracking-wide text-muted">
+          {@render labelHelp('Collisions', 'Number of prefixes used by more than one counted node. Shared first-byte prefixes can create MeshCore route ambiguity.', 'collision')}
+        </div>
         <div class="mt-0.5 text-lg font-semibold {analysis.collisions > 0 ? 'text-bad' : 'text-ok'}">
           {analysis.collisions.toLocaleString()}
         </div>
@@ -425,7 +496,10 @@
         {#if hexLen === 2}
           <!-- The 16×16 prefix map (1-byte only) -->
           <div class="mb-3 flex items-center justify-between gap-3">
-            <h2 class="text-sm font-semibold text-ink">Prefix map (00–ff)</h2>
+            <h2 class="inline-flex items-center gap-1 text-sm font-semibold text-ink">
+              <span>Prefix map (00-ff)</span>
+              {@render helpTip('Each cell is one first-byte prefix. Dark cells are free, colored cells are occupied, and 00/FF are reserved by MeshCore.', 'reserved')}
+            </h2>
             <div class="flex items-center gap-2 text-[10px] text-muted">
               <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
               <span class="inline-flex items-center gap-1">
@@ -461,7 +535,10 @@
         {:else}
           <!-- Canvas heatmap of the whole space (too large for DOM cells) -->
           <div class="mb-3 flex items-center justify-between gap-3">
-            <h2 class="text-sm font-semibold text-ink">Prefix map ({hexLen} hex · {analysis.totalSpace.toLocaleString()})</h2>
+            <h2 class="inline-flex items-center gap-1 text-sm font-semibold text-ink">
+              <span>Prefix map ({hexLen} hex · {analysis.totalSpace.toLocaleString()})</span>
+              {@render helpTip('Canvas heatmap of the wider prefix space. Colored pixels are occupied prefixes; dark space is free. Zoom and hover to inspect exact prefixes.', 'space')}
+            </h2>
             <div class="flex items-center gap-2 text-[10px] text-muted">
               <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm bg-elev2"></span>free</span>
               <span class="inline-flex items-center gap-1">
@@ -489,7 +566,8 @@
         {#if analysis.topCollisions.length > 0}
           <div class="mt-4 border-t border-edge pt-3">
             <div class="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink">
-              <TriangleAlert size={14} class="text-bad" /> Most collisions
+              <TriangleAlert size={14} class="text-bad" />
+              {@render labelHelp('Most collisions', 'The most crowded prefixes in this scan, capped to keep the page fast. Click one to inspect its nodes.', 'collision')}
             </div>
             <div class="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
               {#each analysis.topCollisions as c (c.prefix)}
@@ -512,7 +590,8 @@
       <aside class="space-y-4">
         <div class="rounded-2xl border border-edge bg-elev p-4">
           <div class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-ink">
-            <Sparkles size={15} class="text-accent" /> Suggested prefixes
+            <Sparkles size={15} class="text-accent" />
+            {@render labelHelp('Suggested prefixes', 'For one byte, suggestions are the least-used non-reserved prefixes. For wider searches, suggestions are random currently-free prefixes.')}
           </div>
           <div class="flex flex-wrap gap-1.5">
             {#each analysis.suggestions as s (s.prefix)}
@@ -534,7 +613,9 @@
         </div>
 
         <div class="rounded-2xl border border-edge bg-elev p-4">
-          <div class="mb-2 text-sm font-semibold text-ink">Check a prefix</div>
+          <div class="mb-2 text-sm font-semibold text-ink">
+            {@render labelHelp('Check a prefix', 'Enter a candidate prefix, or paste a full public key and the tool will take the leading bytes. Prefixes beginning with 00 or FF are reserved.', 'reserved')}
+          </div>
           <div class="grid gap-2">
             <input
               class="{inputClass} font-mono"

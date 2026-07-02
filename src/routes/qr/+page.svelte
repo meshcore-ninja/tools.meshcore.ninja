@@ -1,5 +1,6 @@
 <script>
   import { browser } from '$app/environment';
+  import { Tooltip } from 'bits-ui';
   import jsQR from 'jsqr';
   import {
     QrCode as QrIcon,
@@ -12,7 +13,8 @@
     TriangleAlert,
     CircleCheck,
     RefreshCw,
-    X
+    X,
+    CircleQuestionMark
   } from '@lucide/svelte';
   import QrCode from '$lib/QrCode.svelte';
   import Select from '$lib/ui/Select.svelte';
@@ -191,6 +193,34 @@
   <title>QR Studio — MeshCore Tools</title>
 </svelte:head>
 
+{#snippet helpTip(text)}
+  <Tooltip.Root>
+    <Tooltip.Trigger
+      class="inline-grid h-4 w-4 shrink-0 place-items-center rounded-full text-muted outline-none hover:text-accent focus-visible:text-accent focus-visible:ring-1 focus-visible:ring-accent"
+      aria-label="More information"
+    >
+      <CircleQuestionMark size={13} aria-hidden="true" />
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content
+        side="top"
+        sideOffset={6}
+        class="z-50 max-w-72 rounded-md border border-edge bg-elev2 px-3 py-2 text-xs leading-relaxed text-ink shadow-lg shadow-black/30"
+      >
+        {text}
+        <Tooltip.Arrow class="text-edge" />
+      </Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+{/snippet}
+
+{#snippet labelHelp(label, help)}
+  <span class="inline-flex items-center gap-1">
+    <span>{label}</span>
+    {@render helpTip(help)}
+  </span>
+{/snippet}
+
 <section class="mx-auto w-full max-w-6xl px-4 py-8">
   <header class="mb-6 flex items-start gap-3">
     <span class="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-edge bg-elev text-accent">
@@ -232,11 +262,16 @@
         {#if kind === 'contact'}
           <div class="grid gap-4">
             <label class="block">
-              <span class="mb-1 block text-xs font-medium text-dim">Name</span>
+              <span class="mb-1 block text-xs font-medium text-dim">
+                {@render labelHelp('Name', 'Display name stored in the contact QR. It helps the MeshCore app label the node, but the public key is the actual identity.')}
+              </span>
               <input class={inputClass} bind:value={contact.name} placeholder="Node name" />
             </label>
             <label class="block">
-              <span class="mb-1 block text-xs font-medium text-dim">Public key <span class="text-muted">(64 hex chars)</span></span>
+              <span class="mb-1 block text-xs font-medium text-dim">
+                {@render labelHelp('Public key', 'The 32-byte MeshCore node identity key, encoded as 64 hexadecimal characters. This is the stable address used to add the node as a contact.')}
+                <span class="text-muted">(64 hex chars)</span>
+              </span>
               <input
                 class="{inputClass} font-mono"
                 bind:value={contact.public_key}
@@ -246,7 +281,9 @@
               />
             </label>
             <div class="block">
-              <span class="mb-1 block text-xs font-medium text-dim">Type</span>
+              <span class="mb-1 block text-xs font-medium text-dim">
+                {@render labelHelp('Type', 'MeshCore contact role, such as repeater, companion, room or sensor. It affects how the app presents the contact; it does not change the public key.')}
+              </span>
               <Select
                 bind:value={contact.type}
                 items={CONTACT_TYPES.map((t) => ({ value: t.value, label: `${t.value} — ${t.label}` }))}
@@ -256,11 +293,16 @@
         {:else}
           <div class="grid gap-4">
             <label class="block">
-              <span class="mb-1 block text-xs font-medium text-dim">Channel name</span>
+              <span class="mb-1 block text-xs font-medium text-dim">
+                {@render labelHelp('Channel name', 'Human-readable MeshCore channel name included in the QR code. Devices need the same channel information to join the same public or private group.')}
+              </span>
               <input class={inputClass} bind:value={channel.name} placeholder="Public" />
             </label>
             <label class="block">
-              <span class="mb-1 block text-xs font-medium text-dim">Secret <span class="text-muted">(32 hex chars / 16 bytes)</span></span>
+              <span class="mb-1 block text-xs font-medium text-dim">
+                {@render labelHelp('Secret', 'The 16-byte channel secret, encoded as 32 hexadecimal characters. Anyone with the same channel name and secret can join that MeshCore channel.')}
+                <span class="text-muted">(32 hex chars / 16 bytes)</span>
+              </span>
               <div class="flex gap-2">
                 <input
                   class="{inputClass} font-mono"
@@ -300,7 +342,9 @@
         </div>
 
         <div class="mt-4 rounded-lg border border-edge bg-bg p-3">
-          <div class="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Encoded URI</div>
+          <div class="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">
+            {@render labelHelp('Encoded URI', 'The exact meshcore:// URI encoded into the QR code. This is useful for debugging, sharing as a link, or checking what the app will receive.')}
+          </div>
           <code class="block break-all font-mono text-xs text-dim">{activeUri}</code>
         </div>
       </div>
@@ -308,7 +352,7 @@
       <!-- Preview -->
       <aside class="rounded-2xl border border-edge bg-elev p-5">
         <div class="mb-3 text-xs font-medium text-dim">
-          {kind === 'contact' ? 'Add-contact code' : 'Add-channel code'}
+          {@render labelHelp(kind === 'contact' ? 'Add-contact code' : 'Add-channel code', kind === 'contact' ? 'Scan this QR in the MeshCore app to add the specified public key as a contact.' : 'Scan this QR in the MeshCore app to add the channel name and secret.')}
         </div>
         <QrCode value={activeUri} label={kind === 'contact' ? contact.name || 'contact' : channel.name || 'channel'} />
         <p class="mt-4 text-center text-xs text-muted">
@@ -321,7 +365,9 @@
     <div class="grid gap-6 lg:grid-cols-2">
       <div class="rounded-2xl border border-edge bg-elev p-5">
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-dim">Paste a meshcore:// URI</span>
+          <span class="mb-1 block text-xs font-medium text-dim">
+            {@render labelHelp('Paste a meshcore:// URI', 'Paste a MeshCore deep link from a QR code or another source. The decoder checks the URI kind, required fields and basic field formats.')}
+          </span>
           <textarea
             class="{inputClass} h-24 resize-y font-mono"
             bind:value={testInput}
